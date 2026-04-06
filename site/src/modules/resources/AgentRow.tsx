@@ -1,19 +1,7 @@
-import type { Interpolation, Theme } from "@emotion/react";
 import Collapse from "@mui/material/Collapse";
 import Divider from "@mui/material/Divider";
 import Skeleton from "@mui/material/Skeleton";
-import type {
-	Template,
-	Workspace,
-	WorkspaceAgent,
-	WorkspaceAgentMetadata,
-} from "api/typesGenerated";
-import { ChevronDownIcon } from "components/AnimatedIcons/ChevronDown";
-import { Button } from "components/Button/Button";
-import { useProxy } from "contexts/ProxyContext";
-import { SquareCheckBigIcon } from "lucide-react";
-import { useFeatureVisibility } from "modules/dashboard/useFeatureVisibility";
-import { AppStatuses } from "pages/WorkspacePage/AppStatuses";
+import { PlayIcon, SquareCheckBigIcon } from "lucide-react";
 import {
 	type FC,
 	useCallback,
@@ -25,6 +13,26 @@ import {
 import { Link as RouterLink } from "react-router";
 import AutoSizer from "react-virtualized-auto-sizer";
 import type { FixedSizeList as List, ListOnScrollProps } from "react-window";
+import type {
+	Template,
+	Workspace,
+	WorkspaceAgent,
+	WorkspaceAgentMetadata,
+} from "#/api/typesGenerated";
+import { ChevronDownIcon } from "#/components/AnimatedIcons/ChevronDown";
+import { Button } from "#/components/Button/Button";
+import { ExternalImage } from "#/components/ExternalImage/ExternalImage";
+import type { Line } from "#/components/Logs/LogLine";
+import {
+	Tabs,
+	TabsContent,
+	TabsList,
+	TabsTrigger,
+} from "#/components/Tabs/Tabs";
+import { useProxy } from "#/contexts/ProxyContext";
+import { useFeatureVisibility } from "#/modules/dashboard/useFeatureVisibility";
+import { AppStatuses } from "#/pages/WorkspacePage/AppStatuses";
+import { cn } from "#/utils/cn";
 import { AgentApps, organizeAgentApps } from "./AgentApps/AgentApps";
 import { AgentDevcontainerCard } from "./AgentDevcontainerCard";
 import { AgentExternal } from "./AgentExternal";
@@ -51,6 +59,45 @@ interface AgentRowProps {
 	initialMetadata?: WorkspaceAgentMetadata[];
 	onUpdateAgent: () => void;
 }
+
+const statusBorderClassByStatus: Partial<
+	Record<WorkspaceAgent["status"], string>
+> = {
+	connected: "border-border-success",
+	connecting: "border-border-pending",
+	timeout: "border-border-warning",
+};
+
+const statusBorderClassByLifecycle: Partial<
+	Record<WorkspaceAgent["lifecycle_state"], string>
+> = {
+	starting: "border-border-pending",
+	shutting_down: "border-border-pending",
+	ready: "border-border-success",
+	start_timeout: "border-border-warning",
+	shutdown_timeout: "border-border-warning",
+	start_error: "border-border-warning",
+	shutdown_error: "border-border-warning",
+	off: "border-border",
+};
+
+const getAgentBorderClass = (
+	agent: WorkspaceAgent,
+	hasErrorState: boolean,
+): string => {
+	if (hasErrorState) {
+		return "border-border";
+	}
+
+	// Lifecycle state is more specific than connection status, so it wins.
+	return (
+		statusBorderClassByLifecycle[agent.lifecycle_state] ??
+		statusBorderClassByStatus[agent.status] ??
+		"border-border"
+	);
+};
+
+const STARTUP_SCRIPT_DISPLAY_NAME = "Startup Script";
 
 export const AgentRow: FC<AgentRowProps> = ({
 	agent,
@@ -143,24 +190,80 @@ export const AgentRow: FC<AgentRowProps> = ({
 	const hasSubdomainApps = agent.apps?.some((app) => app.subdomain);
 	const shouldShowWildcardWarning =
 		hasSubdomainApps && !proxy.proxy?.wildcard_hostname;
+	const borderClass = getAgentBorderClass(
+		agent,
+		Boolean(hasDevcontainerErrors || shouldShowWildcardWarning),
+	);
+
+	const [selectedLogTab, setSelectedLogTab] = useState("all");
+	const sourceLogTabs = agent.log_sources
+		.filter((logSource) => {
+			// Remove the logSources that have no entries.
+			return agentLogs.some(
+				(log) =>
+					log.source_id === logSource.id && (log.output?.length ?? 0) > 0,
+			);
+		})
+		.map((logSource) => ({
+			// Show the icon for the log source if it has one.
+			// In the startup script case, we show a bespoke play icon.
+			startIcon: logSource.icon ? (
+				<ExternalImage
+					src={logSource.icon}
+					alt=""
+					className="size-icon-xs shrink-0"
+				/>
+			) : logSource.display_name === STARTUP_SCRIPT_DISPLAY_NAME ? (
+				<PlayIcon className="size-icon-xs shrink-0" />
+			) : null,
+			title: logSource.display_name,
+			value: logSource.id,
+		}));
+	const startupScriptLogTab = sourceLogTabs.find(
+		(tab) => tab.title === STARTUP_SCRIPT_DISPLAY_NAME,
+	);
+	const sortedSourceLogTabs = sourceLogTabs
+		.filter((tab) => tab !== startupScriptLogTab)
+		.sort((a, b) => a.title.localeCompare(b.title));
+	const logTabs: {
+		startIcon?: React.ReactNode;
+		title: string;
+		value: string;
+	}[] = [
+		{
+			title: "All Logs",
+			value: "all",
+		},
+		...(startupScriptLogTab ? [startupScriptLogTab] : []),
+		...sortedSourceLogTabs,
+	];
+	const selectedLogs =
+		selectedLogTab === "all"
+			? agentLogs
+			: agentLogs.filter((log) => log.source_id === selectedLogTab);
+	const selectedLogLines: readonly Line[] = selectedLogs.map((log) => ({
+		id: log.id,
+		output: log.output,
+		time: log.created_at,
+		level: log.level,
+		sourceId: log.source_id,
+	}));
 
 	return (
 		<div
 			key={agent.id}
-			className="flex flex-col max-w-full"
-			css={[
-				styles.agentRow,
-				styles[`agentRow-${agent.status}`],
-				styles[`agentRow-lifecycle-${agent.lifecycle_state}`],
-				(hasDevcontainerErrors || shouldShowWildcardWarning) &&
-					styles.agentRowWithErrors,
-			]}
+			className={cn(
+				"flex max-w-full flex-col rounded-lg border border-solid bg-surface-primary text-sm shadow-md overflow-clip",
+				borderClass,
+			)}
 		>
-			<header css={styles.header}>
-				<div css={styles.agentInfo}>
-					<div css={styles.agentNameAndStatus}>
+			<header className="flex flex-wrap items-center justify-between gap-4 px-4 pt-4 pl-8 leading-normal md:gap-6 [&:has(+_[role='alert'])]:pb-4">
+				<div className="flex min-w-0 items-center gap-6 text-sm text-content-secondary">
+					<div className="flex min-w-0 w-full items-center gap-4 md:w-auto">
 						<AgentStatus agent={agent} />
-						<span css={styles.agentName}>{agent.name}</span>
+						<span className="block max-w-[260px] overflow-hidden text-ellipsis whitespace-nowrap text-base font-semibold text-content-primary">
+							{agent.name}
+						</span>
 					</div>
 					{agent.status === "connected" && (
 						<>
@@ -207,7 +310,7 @@ export const AgentRow: FC<AgentRowProps> = ({
 				</div>
 			</header>
 
-			<div css={styles.content}>
+			<div className="flex flex-col gap-8 p-8">
 				{workspace.latest_app_status?.agent_id === agent.id && (
 					<section>
 						<h3 className="sr-only">App statuses</h3>
@@ -229,7 +332,7 @@ export const AgentRow: FC<AgentRowProps> = ({
 				{shouldShowWildcardWarning && <WildcardHostnameWarning />}
 
 				{shouldDisplayAppsSection && (
-					<section css={styles.apps}>
+					<section className="flex flex-wrap gap-4 [&:empty]:hidden">
 						{shouldDisplayAgentApps && (
 							<>
 								{showVSCode && (
@@ -263,18 +366,18 @@ export const AgentRow: FC<AgentRowProps> = ({
 				)}
 
 				{agent.status === "connecting" && !isExternalAgent && (
-					<section css={styles.apps}>
+					<section className="flex flex-wrap gap-4 [&:empty]:hidden">
 						<Skeleton
 							width={80}
 							height={32}
 							variant="rectangular"
-							css={styles.buttonSkeleton}
+							className="rounded"
 						/>
 						<Skeleton
 							width={110}
 							height={32}
 							variant="rectangular"
-							css={styles.buttonSkeleton}
+							className="rounded"
 						/>
 					</section>
 				)}
@@ -307,35 +410,7 @@ export const AgentRow: FC<AgentRowProps> = ({
 			</div>
 
 			{hasStartupFeatures && (
-				<section
-					css={(theme) => ({
-						borderTop: `1px solid ${theme.palette.divider}`,
-					})}
-				>
-					<Collapse in={showLogs}>
-						<AutoSizer disableHeight>
-							{({ width }) => (
-								<AgentLogs
-									ref={logListRef}
-									innerRef={logListDivRef}
-									height={256}
-									width={width}
-									css={styles.startupLogs}
-									onScroll={handleLogScroll}
-									overflowed={agent.logs_overflowed}
-									logs={agentLogs.map((l) => ({
-										id: l.id,
-										level: l.level,
-										output: l.output,
-										sourceId: l.source_id,
-										time: l.created_at,
-									}))}
-									sources={agent.log_sources}
-								/>
-							)}
-						</AutoSizer>
-					</Collapse>
-
+				<section className="border-0 border-t border-solid border-border">
 					<div className="flex flex-row gap-2 px-4 py-3">
 						<Button
 							size="sm"
@@ -348,206 +423,49 @@ export const AgentRow: FC<AgentRowProps> = ({
 						<Divider orientation="vertical" variant="middle" flexItem />
 						<DownloadAgentLogsButton agent={agent} />
 					</div>
+					<Collapse in={showLogs}>
+						<div className="px-4 pb-4">
+							<div className="border border-solid rounded-md overflow-clip">
+								<Tabs
+									className="-mx-px -mt-px"
+									value={selectedLogTab}
+									onValueChange={setSelectedLogTab}
+								>
+									<TabsList variant="insideBox">
+										{logTabs.map((tab) => (
+											<TabsTrigger key={tab.value} value={tab.value}>
+												{tab.startIcon}
+												<span>{tab.title}</span>
+											</TabsTrigger>
+										))}
+									</TabsList>
+									{/*
+										Using a singular TabsContent is necessary to avoid scrolling
+										issues when the selected log tab changes.
+									*/}
+									<TabsContent value={selectedLogTab}>
+										<AutoSizer disableHeight>
+											{({ width }) => (
+												<AgentLogs
+													ref={logListRef}
+													innerRef={logListDivRef}
+													height={256}
+													width={width}
+													onScroll={handleLogScroll}
+													logs={selectedLogLines}
+													sources={agent.log_sources}
+													overflowed={agent.logs_overflowed}
+													className="bg-transparent"
+												/>
+											)}
+										</AutoSizer>
+									</TabsContent>
+								</Tabs>
+							</div>
+						</div>
+					</Collapse>
 				</section>
 			)}
 		</div>
 	);
 };
-
-const styles = {
-	agentRow: (theme) => ({
-		fontSize: 14,
-		border: `1px solid ${theme.palette.text.secondary}`,
-		backgroundColor: theme.palette.background.default,
-		borderRadius: 8,
-		boxShadow: theme.shadows[3],
-	}),
-
-	"agentRow-connected": (theme) => ({
-		borderColor: theme.palette.success.light,
-	}),
-
-	"agentRow-disconnected": (theme) => ({
-		borderColor: theme.palette.divider,
-	}),
-
-	"agentRow-connecting": (theme) => ({
-		borderColor: theme.palette.info.light,
-	}),
-
-	"agentRow-timeout": (theme) => ({
-		borderColor: theme.palette.warning.light,
-	}),
-
-	"agentRow-lifecycle-created": {},
-
-	"agentRow-lifecycle-starting": (theme) => ({
-		borderColor: theme.palette.info.light,
-	}),
-
-	"agentRow-lifecycle-ready": (theme) => ({
-		borderColor: theme.palette.success.light,
-	}),
-
-	"agentRow-lifecycle-start_timeout": (theme) => ({
-		borderColor: theme.palette.warning.light,
-	}),
-
-	"agentRow-lifecycle-start_error": (theme) => ({
-		borderColor: theme.palette.error.light,
-	}),
-
-	"agentRow-lifecycle-shutting_down": (theme) => ({
-		borderColor: theme.palette.info.light,
-	}),
-
-	"agentRow-lifecycle-shutdown_timeout": (theme) => ({
-		borderColor: theme.palette.warning.light,
-	}),
-
-	"agentRow-lifecycle-shutdown_error": (theme) => ({
-		borderColor: theme.palette.error.light,
-	}),
-
-	"agentRow-lifecycle-off": (theme) => ({
-		borderColor: theme.palette.divider,
-	}),
-
-	header: (theme) => ({
-		padding: "16px 16px 0 32px",
-		display: "flex",
-		gap: 24,
-		alignItems: "center",
-		justifyContent: "space-between",
-		flexWrap: "wrap",
-		lineHeight: "1.5",
-
-		"&:has(+ [role='alert'])": {
-			paddingBottom: 16,
-		},
-
-		[theme.breakpoints.down("md")]: {
-			gap: 16,
-		},
-	}),
-
-	agentInfo: (theme) => ({
-		display: "flex",
-		alignItems: "center",
-		gap: 24,
-		color: theme.palette.text.secondary,
-		fontSize: 14,
-	}),
-
-	agentNameAndInfo: (theme) => ({
-		display: "flex",
-		alignItems: "center",
-		gap: 24,
-		flexWrap: "wrap",
-
-		[theme.breakpoints.down("md")]: {
-			gap: 12,
-		},
-	}),
-
-	content: {
-		padding: 32,
-		display: "flex",
-		flexDirection: "column",
-		gap: 32,
-	},
-
-	apps: (theme) => ({
-		display: "flex",
-		gap: 16,
-		flexWrap: "wrap",
-
-		"&:empty": {
-			display: "none",
-		},
-
-		[theme.breakpoints.down("md")]: {
-			marginLeft: 0,
-			justifyContent: "flex-start",
-		},
-	}),
-
-	agentDescription: (theme) => ({
-		fontSize: 14,
-		color: theme.palette.text.secondary,
-	}),
-
-	agentNameAndStatus: (theme) => ({
-		display: "flex",
-		alignItems: "center",
-		gap: 16,
-
-		[theme.breakpoints.down("md")]: {
-			width: "100%",
-		},
-	}),
-
-	agentName: (theme) => ({
-		whiteSpace: "nowrap",
-		overflow: "hidden",
-		textOverflow: "ellipsis",
-		maxWidth: 260,
-		fontWeight: 600,
-		flexShrink: 0,
-		width: "fit-content",
-		fontSize: 16,
-		color: theme.palette.text.primary,
-
-		[theme.breakpoints.down("md")]: {
-			overflow: "unset",
-		},
-	}),
-
-	agentDataGroup: {
-		display: "flex",
-		alignItems: "baseline",
-		gap: 48,
-	},
-
-	agentData: (theme) => ({
-		display: "flex",
-		flexDirection: "column",
-		fontSize: 12,
-
-		"& > *:first-of-type": {
-			fontWeight: 500,
-			color: theme.palette.text.secondary,
-		},
-	}),
-
-	buttonSkeleton: {
-		borderRadius: 4,
-	},
-
-	agentErrorMessage: (theme) => ({
-		fontSize: 12,
-		fontWeight: 400,
-		marginTop: 4,
-		color: theme.palette.warning.light,
-	}),
-
-	agentOS: {
-		textTransform: "capitalize",
-	},
-
-	startupLogs: (theme) => ({
-		maxHeight: 420,
-		borderBottom: `1px solid ${theme.palette.divider}`,
-		backgroundColor: theme.palette.background.paper,
-		paddingTop: 16,
-
-		// We need this to be able to apply the padding top from startupLogs
-		"& > div": {
-			position: "relative",
-		},
-	}),
-
-	agentRowWithErrors: (theme) => ({
-		borderColor: theme.palette.divider,
-	}),
-} satisfies Record<string, Interpolation<Theme>>;

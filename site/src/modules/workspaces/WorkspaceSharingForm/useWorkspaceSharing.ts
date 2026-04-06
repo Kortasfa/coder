@@ -1,19 +1,18 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "react-query";
+import { toast } from "sonner";
 import {
 	setWorkspaceGroupRole,
 	setWorkspaceUserRole,
 	workspaceACL,
-} from "api/queries/workspaces";
+} from "#/api/queries/workspaces";
 import type {
 	Group,
 	Workspace,
 	WorkspaceGroup,
 	WorkspaceRole,
 	WorkspaceUser,
-} from "api/typesGenerated";
-import { displaySuccess } from "components/GlobalSnackbar/utils";
-import { useDashboard } from "modules/dashboard/useDashboard";
-import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "react-query";
+} from "#/api/typesGenerated";
 
 /**
  * Encapsulates all data fetching and mutations for workspace sharing.
@@ -22,13 +21,9 @@ import { useMutation, useQuery, useQueryClient } from "react-query";
  */
 export function useWorkspaceSharing(workspace: Workspace) {
 	const queryClient = useQueryClient();
-	const { experiments } = useDashboard();
 	const [hasRemovedMember, setHasRemovedMember] = useState(false);
 
-	const workspaceACLQuery = useQuery({
-		...workspaceACL(workspace.id),
-		enabled: experiments.includes("workspace-sharing"),
-	});
+	const workspaceACLQuery = useQuery(workspaceACL(workspace.id));
 
 	const addUserMutation = useMutation(setWorkspaceUserRole(queryClient));
 	const updateUserMutation = useMutation(setWorkspaceUserRole(queryClient));
@@ -43,13 +38,15 @@ export function useWorkspaceSharing(workspace: Workspace) {
 		role: WorkspaceRole,
 		reset: () => void,
 	) => {
-		await addUserMutation.mutateAsync({
+		const mutation = addUserMutation.mutateAsync({
 			workspaceId: workspace.id,
 			userId: user.id,
 			role,
 		});
-		setHasRemovedMember(false);
-		displaySuccess("User added to workspace successfully!");
+		toast.promise(mutation, {
+			loading: `Adding ${user.username} to workspace...`,
+			success: `"${user.username}" added to workspace successfully.`,
+		});
 		reset();
 	};
 
@@ -59,7 +56,7 @@ export function useWorkspaceSharing(workspace: Workspace) {
 			userId: user.id,
 			role,
 		});
-		displaySuccess("User role updated successfully!");
+		toast.success(`"${user.username}" role updated successfully.`);
 	};
 
 	const removeUser = async (user: WorkspaceUser) => {
@@ -69,7 +66,7 @@ export function useWorkspaceSharing(workspace: Workspace) {
 			role: "",
 		});
 		setHasRemovedMember(true);
-		displaySuccess("User removed successfully!");
+		toast.success(`"${user.username}" removed successfully.`);
 	};
 
 	const addGroup = async (
@@ -83,7 +80,7 @@ export function useWorkspaceSharing(workspace: Workspace) {
 			role,
 		});
 		setHasRemovedMember(false);
-		displaySuccess("Group added to workspace successfully!");
+		toast.success(`Group "${group.name}" added to workspace successfully.`);
 		reset();
 	};
 
@@ -93,7 +90,7 @@ export function useWorkspaceSharing(workspace: Workspace) {
 			groupId: group.id,
 			role,
 		});
-		displaySuccess("Group role updated successfully!");
+		toast.success(`Group role "${role}" updated successfully.`);
 	};
 
 	const removeGroup = async (group: Group) => {
@@ -103,7 +100,7 @@ export function useWorkspaceSharing(workspace: Workspace) {
 			role: "",
 		});
 		setHasRemovedMember(true);
-		displaySuccess("Group removed successfully!");
+		toast.success(`Group "${group.name}" removed successfully.`);
 	};
 
 	const mutationError =

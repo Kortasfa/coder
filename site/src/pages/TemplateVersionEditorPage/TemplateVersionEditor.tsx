@@ -1,31 +1,4 @@
 import IconButton from "@mui/material/IconButton";
-import { getErrorDetail, getErrorMessage } from "api/errors";
-import type {
-	ProvisionerJobLog,
-	Template,
-	TemplateVersion,
-	TemplateVersionVariable,
-	VariableValue,
-	WorkspaceResource,
-} from "api/typesGenerated";
-import { Alert } from "components/Alert/Alert";
-import { Button } from "components/Button/Button";
-import { Sidebar } from "components/FullPageLayout/Sidebar";
-import {
-	Topbar,
-	TopbarAvatar,
-	TopbarButton,
-	TopbarData,
-	TopbarDivider,
-	TopbarIconButton,
-} from "components/FullPageLayout/Topbar";
-import { displayError, displaySuccess } from "components/GlobalSnackbar/utils";
-import { Loader } from "components/Loader/Loader";
-import {
-	Tooltip,
-	TooltipContent,
-	TooltipTrigger,
-} from "components/Tooltip/Tooltip";
 import {
 	ChevronLeftIcon,
 	ExternalLinkIcon,
@@ -34,24 +7,52 @@ import {
 	TriangleAlertIcon,
 	XIcon,
 } from "lucide-react";
-import { linkToTemplate, useLinks } from "modules/navigation";
-import {
-	AlertVariant,
-	ProvisionerAlert,
-} from "modules/provisioners/ProvisionerAlert";
-import { ProvisionerStatusAlert } from "modules/provisioners/ProvisionerStatusAlert";
-import { WildcardHostnameWarning } from "modules/resources/WildcardHostnameWarning";
-import { isBinaryData } from "modules/templates/TemplateFiles/isBinaryData";
-import { TemplateFileTree } from "modules/templates/TemplateFiles/TemplateFileTree";
-import { TemplateResourcesTable } from "modules/templates/TemplateResourcesTable/TemplateResourcesTable";
-import { WorkspaceBuildLogs } from "modules/workspaces/WorkspaceBuildLogs/WorkspaceBuildLogs";
-import type { PublishVersionData } from "pages/TemplateVersionEditorPage/types";
 import { type FC, useCallback, useEffect, useRef, useState } from "react";
 import {
 	Link as RouterLink,
+	useNavigate,
 	unstable_usePrompt as usePrompt,
 } from "react-router";
-import { cn } from "utils/cn";
+import { toast } from "sonner";
+import { getErrorDetail, getErrorMessage } from "#/api/errors";
+import type {
+	ProvisionerJobLog,
+	Template,
+	TemplateVersion,
+	TemplateVersionVariable,
+	VariableValue,
+	WorkspaceResource,
+} from "#/api/typesGenerated";
+import { Alert, AlertTitle } from "#/components/Alert/Alert";
+import { Button } from "#/components/Button/Button";
+import { Sidebar } from "#/components/FullPageLayout/Sidebar";
+import {
+	Topbar,
+	TopbarAvatar,
+	TopbarButton,
+	TopbarData,
+	TopbarDivider,
+	TopbarIconButton,
+} from "#/components/FullPageLayout/Topbar";
+import { Loader } from "#/components/Loader/Loader";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipTrigger,
+} from "#/components/Tooltip/Tooltip";
+import { linkToTemplate, useLinks } from "#/modules/navigation";
+import {
+	AlertVariant,
+	ProvisionerAlert,
+} from "#/modules/provisioners/ProvisionerAlert";
+import { ProvisionerStatusAlert } from "#/modules/provisioners/ProvisionerStatusAlert";
+import { WildcardHostnameWarning } from "#/modules/resources/WildcardHostnameWarning";
+import { isBinaryData } from "#/modules/templates/TemplateFiles/isBinaryData";
+import { TemplateFileTree } from "#/modules/templates/TemplateFiles/TemplateFileTree";
+import { TemplateResourcesTable } from "#/modules/templates/TemplateResourcesTable/TemplateResourcesTable";
+import { WorkspaceBuildLogs } from "#/modules/workspaces/WorkspaceBuildLogs/WorkspaceBuildLogs";
+import type { PublishVersionData } from "#/pages/TemplateVersionEditorPage/types";
+import { cn } from "#/utils/cn";
 import {
 	createFile,
 	existsFile,
@@ -61,7 +62,7 @@ import {
 	moveFile,
 	removeFile,
 	updateFile,
-} from "utils/filetree";
+} from "#/utils/filetree";
 import {
 	CreateFileDialog,
 	DeleteFileDialog,
@@ -130,6 +131,7 @@ export const TemplateVersionEditor: FC<TemplateVersionEditorProps> = ({
 	activePath,
 	onActivePathChange,
 }) => {
+	const navigate = useNavigate();
 	const getLink = useLinks();
 	const [selectedTab, setSelectedTab] = useState<Tab>(defaultTab);
 	const [fileTree, setFileTree] = useState(defaultFileTree);
@@ -145,10 +147,9 @@ export const TemplateVersionEditor: FC<TemplateVersionEditorProps> = ({
 			await onPreview(fileTree);
 			setSelectedTab("logs");
 		} catch (error) {
-			displayError(
-				getErrorMessage(error, "Error on previewing the template"),
-				getErrorDetail(error),
-			);
+			toast.error(getErrorMessage(error, "Error on previewing the template."), {
+				description: getErrorDetail(error),
+			});
 		}
 	}, [fileTree, onPreview]);
 
@@ -175,6 +176,11 @@ export const TemplateVersionEditor: FC<TemplateVersionEditorProps> = ({
 		};
 	}, [triggerPreview]);
 
+	const canBuild = !isBuilding;
+	const templateLink = getLink(
+		linkToTemplate(template.organization_name, template.name),
+	);
+
 	// Automatically switch to the template preview tab when the build succeeds.
 	const previousVersion = useRef<TemplateVersion>(undefined);
 	useEffect(() => {
@@ -188,23 +194,24 @@ export const TemplateVersionEditor: FC<TemplateVersionEditorProps> = ({
 			templateVersion.job.status === "succeeded"
 		) {
 			setDirty(false);
-			displaySuccess(
+			toast.success(
 				`Template version "${previousVersion.current.name}" built successfully.`,
+				{
+					action: {
+						label: "View template",
+						onClick: () => navigate(templateLink),
+					},
+				},
 			);
 		}
 		previousVersion.current = templateVersion;
-	}, [templateVersion]);
+	}, [templateVersion, navigate, templateLink]);
 
 	const editorValue = activePath ? getFileText(activePath, fileTree) : "";
 	const isEditorValueBinary =
 		typeof editorValue === "string" ? isBinaryData(editorValue) : false;
 
 	useLeaveSiteWarning(dirty);
-
-	const canBuild = !isBuilding;
-	const templateLink = getLink(
-		linkToTemplate(template.organization_name, template.name),
-	);
 
 	const gotBuildLogs = buildLogs && buildLogs.length > 0;
 
@@ -299,16 +306,14 @@ export const TemplateVersionEditor: FC<TemplateVersionEditorProps> = ({
 								prominent
 								dismissible
 								actions={
-									<Button
-										variant="subtle"
-										size="sm"
-										onClick={onCreateWorkspace}
-									>
+									<Button size="sm" onClick={onCreateWorkspace}>
 										Create a workspace
 									</Button>
 								}
 							>
-								Successfully published {publishedVersion.name}!
+								<AlertTitle>
+									Successfully published {publishedVersion.name}!
+								</AlertTitle>
 							</Alert>
 						</div>
 					)}

@@ -1,14 +1,14 @@
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { API } from "#/api/api";
 import {
 	MockEntitlementsWithScheduling,
 	MockTemplate,
-} from "testHelpers/entities";
+} from "#/testHelpers/entities";
 import {
 	renderWithTemplateSettingsLayout,
 	waitForLoaderToBeRemoved,
-} from "testHelpers/renderHelpers";
-import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { API } from "api/api";
+} from "#/testHelpers/renderHelpers";
 import {
 	getValidationSchema,
 	type TemplateScheduleFormValues,
@@ -136,7 +136,7 @@ describe("TemplateSchedulePage", () => {
 		await waitForWithCutoff(() =>
 			expect(API.updateTemplateMeta).toBeCalledTimes(1),
 		);
-	});
+	}, 15_000);
 
 	test("default is converted to and from hours", async () => {
 		await renderTemplateSchedulePage();
