@@ -8,6 +8,7 @@ import { DetailedError } from "#/api/errors";
 import type {
 	DynamicParametersRequest,
 	DynamicParametersResponse,
+	PreviewParameter,
 	WorkspaceBuildParameter,
 } from "#/api/typesGenerated";
 import { ErrorAlert } from "#/components/Alert/ErrorAlert";
@@ -22,6 +23,7 @@ import {
 	TooltipTrigger,
 } from "#/components/Tooltip/Tooltip";
 import { useEffectEvent } from "#/hooks/hookPolyfills";
+import { getInitialParameterValues } from "#/modules/workspaces/DynamicParameter/DynamicParameter";
 import { docs } from "#/utils/docs";
 import { pageTitle } from "#/utils/page";
 import type { AutofillBuildParameter } from "#/utils/richParameters";
@@ -73,24 +75,31 @@ const WorkspaceParametersPageExperimental: FC = () => {
 		}
 	});
 
-	// On page load, sends initial workspace build parameters to the websocket.
-	// This ensures the backend has the form's complete initial state,
-	// vital for rendering dynamic UI elements dependent on initial parameter values.
-	const sendInitialParameters = useEffectEvent(() => {
-		if (initialParamsSentRef.current) return;
-		if (autofillParameters.length === 0) return;
+	// Sends the user's build parameter values to the WebSocket so the
+	// backend evaluates dynamic expressions against real values instead
+	// of template defaults. Bails when the REST build parameters
+	// haven't loaded yet; the retrigger effect below covers that case.
+	const sendInitialParameters = useEffectEvent(
+		(parameters: PreviewParameter[]) => {
+			if (initialParamsSentRef.current) return;
+			if (parameters.length === 0) return;
+			if (!latestBuildParameters) return;
 
-		const initialParamsToSend: Record<string, string> = {};
-		for (const param of autofillParameters) {
-			if (param.name && param.value) {
-				initialParamsToSend[param.name] = param.value;
+			const inputs: Record<string, string> = {};
+			for (const p of getInitialParameterValues(
+				parameters,
+				autofillParameters,
+			)) {
+				if (p.name && p.value) {
+					inputs[p.name] = p.value;
+				}
 			}
-		}
-		if (Object.keys(initialParamsToSend).length === 0) return;
+			if (Object.keys(inputs).length === 0) return;
 
-		sendMessage(initialParamsToSend);
-		initialParamsSentRef.current = true;
-	});
+			sendMessage(inputs);
+			initialParamsSentRef.current = true;
+		},
+	);
 
 	const onMessage = useEffectEvent((response: DynamicParametersResponse) => {
 		if (latestResponse && latestResponse?.id >= response.id) {
@@ -104,12 +113,26 @@ const WorkspaceParametersPageExperimental: FC = () => {
 			return;
 		}
 
-		setLatestResponse(response);
-
+		// Send initial params before storing the response so the
+		// stale-response guard above filters the defaults on the
+		// next WS message.
 		if (!initialParamsSentRef.current && response.parameters?.length > 0) {
-			sendInitialParameters();
+			sendInitialParameters([...response.parameters]);
 		}
+
+		setLatestResponse(response);
 	});
+
+	// When the WS first message arrives before the REST build
+	// parameters have loaded, sendInitialParameters bails. This
+	// effect retriggers the send once both sources are available.
+	useEffect(() => {
+		if (initialParamsSentRef.current) return;
+		if (!latestResponse?.parameters?.length) return;
+		if (!latestBuildParameters) return;
+
+		sendInitialParameters([...latestResponse.parameters]);
+	}, [latestResponse, latestBuildParameters, sendInitialParameters]);
 
 	useEffect(() => {
 		if (!templateVersionId && !workspace.latest_build.template_version_id)
@@ -228,10 +251,20 @@ const WorkspaceParametersPageExperimental: FC = () => {
 	const error =
 		wsError || startWithParameters.error || restartWithParameters.error;
 
+	// The initial WS response (id: -1) contains only template defaults.
+	// Keep the loader visible until a response reflecting the user's
+	// actual build parameter values arrives (id >= 0).
+	const awaitingUserValues =
+		latestResponse !== null &&
+		latestResponse.id < 0 &&
+		initialParamsSentRef.current &&
+		!wsError;
+
 	if (
 		latestBuildParametersLoading ||
 		(!latestResponse && !wsError) ||
-		(ws.current && ws.current.readyState === WebSocket.CONNECTING)
+		(ws.current && ws.current.readyState === WebSocket.CONNECTING) ||
+		awaitingUserValues
 	) {
 		return <Loader />;
 	}

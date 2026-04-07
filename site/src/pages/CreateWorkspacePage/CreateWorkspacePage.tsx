@@ -300,7 +300,7 @@ const CreateWorkspacePage: FC = () => {
 	const awaitingUserValues =
 		latestResponse !== null &&
 		latestResponse.id < 0 &&
-		latestResponse.parameters.length > 0 &&
+		initialParamsSentRef.current &&
 		!wsError;
 
 	const shouldShowLoader =
