@@ -2,6 +2,7 @@ package chatdebug
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/mock/gomock"
 	"golang.org/x/xerrors"
 
+	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/coderd/database/dbmock"
 	"github.com/coder/coder/v2/coderd/x/chatd/chattest"
 	"github.com/coder/coder/v2/testutil"
@@ -22,6 +24,126 @@ import (
 type testError struct{ message string }
 
 func (e *testError) Error() string { return e.message }
+
+func expectDebugLoggingEnabled(
+	t *testing.T,
+	db *dbmock.MockStore,
+	ownerID uuid.UUID,
+) {
+	t.Helper()
+
+	db.EXPECT().GetChatDebugLoggingAllowUsers(gomock.Any()).Return(true, nil)
+	db.EXPECT().GetUserChatDebugLoggingEnabled(gomock.Any(), ownerID).Return(true, nil)
+}
+
+func expectCreateStepNumberWithRequestValidity(
+	t *testing.T,
+	db *dbmock.MockStore,
+	runID uuid.UUID,
+	chatID uuid.UUID,
+	stepNumber int32,
+	op Operation,
+	normalizedRequestValid bool,
+) uuid.UUID {
+	t.Helper()
+
+	stepID := uuid.New()
+	db.EXPECT().
+		InsertChatDebugStep(gomock.Any(), gomock.AssignableToTypeOf(database.InsertChatDebugStepParams{})).
+		DoAndReturn(func(_ context.Context, params database.InsertChatDebugStepParams) (database.ChatDebugStep, error) {
+			require.Equal(t, runID, params.RunID)
+			require.Equal(t, chatID, params.ChatID)
+			require.Equal(t, stepNumber, params.StepNumber)
+			require.Equal(t, string(op), params.Operation)
+			require.Equal(t, string(StatusInProgress), params.Status)
+			require.Equal(t, normalizedRequestValid, params.NormalizedRequest.Valid)
+
+			return database.ChatDebugStep{
+				ID:         stepID,
+				RunID:      runID,
+				ChatID:     chatID,
+				StepNumber: params.StepNumber,
+				Operation:  params.Operation,
+				Status:     params.Status,
+			}, nil
+		})
+
+	// CreateStep now touches the parent run's updated_at to prevent
+	// premature stale finalization.
+	db.EXPECT().
+		UpdateChatDebugRun(gomock.Any(), gomock.AssignableToTypeOf(database.UpdateChatDebugRunParams{})).
+		DoAndReturn(func(_ context.Context, params database.UpdateChatDebugRunParams) (database.ChatDebugRun, error) {
+			require.Equal(t, runID, params.ID)
+			require.Equal(t, chatID, params.ChatID)
+			return database.ChatDebugRun{ID: runID, ChatID: chatID}, nil
+		})
+
+	return stepID
+}
+
+func expectCreateStepNumber(
+	t *testing.T,
+	db *dbmock.MockStore,
+	runID uuid.UUID,
+	chatID uuid.UUID,
+	stepNumber int32,
+	op Operation,
+) uuid.UUID {
+	t.Helper()
+
+	return expectCreateStepNumberWithRequestValidity(
+		t,
+		db,
+		runID,
+		chatID,
+		stepNumber,
+		op,
+		true,
+	)
+}
+
+func expectCreateStep(
+	t *testing.T,
+	db *dbmock.MockStore,
+	runID uuid.UUID,
+	chatID uuid.UUID,
+	op Operation,
+) uuid.UUID {
+	t.Helper()
+
+	return expectCreateStepNumber(t, db, runID, chatID, 1, op)
+}
+
+func expectUpdateStep(
+	t *testing.T,
+	db *dbmock.MockStore,
+	stepID uuid.UUID,
+	chatID uuid.UUID,
+	status Status,
+	assertFn func(database.UpdateChatDebugStepParams),
+) {
+	t.Helper()
+
+	db.EXPECT().
+		UpdateChatDebugStep(gomock.Any(), gomock.AssignableToTypeOf(database.UpdateChatDebugStepParams{})).
+		DoAndReturn(func(_ context.Context, params database.UpdateChatDebugStepParams) (database.ChatDebugStep, error) {
+			require.Equal(t, stepID, params.ID)
+			require.Equal(t, chatID, params.ChatID)
+			require.True(t, params.Status.Valid)
+			require.Equal(t, string(status), params.Status.String)
+			require.True(t, params.FinishedAt.Valid)
+
+			if assertFn != nil {
+				assertFn(params)
+			}
+
+			return database.ChatDebugStep{
+				ID:     stepID,
+				ChatID: chatID,
+				Status: params.Status.String,
+			}, nil
+		})
+}
 
 func TestDebugModel_Provider(t *testing.T) {
 	t.Parallel()
@@ -48,6 +170,7 @@ func TestDebugModel_Disabled(t *testing.T) {
 	db := dbmock.NewMockStore(ctrl)
 	chatID := uuid.New()
 	ownerID := uuid.New()
+
 	svc := NewService(db, testutil.Logger(t), nil)
 	respWant := &fantasy.Response{FinishReason: fantasy.FinishReasonStop}
 	inner := &chattest.FakeModel{
@@ -96,6 +219,30 @@ func TestDebugModel_Generate(t *testing.T) {
 		Usage:        fantasy.Usage{InputTokens: 10, OutputTokens: 4, TotalTokens: 14},
 		Warnings:     []fantasy.CallWarning{{Message: "warning"}},
 	}
+
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationGenerate)
+	expectUpdateStep(t, db, stepID, chatID, StatusCompleted, func(params database.UpdateChatDebugStepParams) {
+		require.True(t, params.NormalizedResponse.Valid)
+		require.True(t, params.Usage.Valid)
+		require.True(t, params.Attempts.Valid)
+		// Clean successes (no prior error) leave the error column
+		// as SQL NULL rather than sending jsonClear.
+		require.False(t, params.Error.Valid)
+		require.False(t, params.Metadata.Valid)
+
+		// Verify actual JSON content so a broken tag or field
+		// rename is caught rather than only checking .Valid.
+		var usage fantasy.Usage
+		require.NoError(t, json.Unmarshal(params.Usage.RawMessage, &usage))
+		require.EqualValues(t, 10, usage.InputTokens)
+		require.EqualValues(t, 4, usage.OutputTokens)
+		require.EqualValues(t, 14, usage.TotalTokens)
+
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(params.NormalizedResponse.RawMessage, &resp))
+		require.Equal(t, "stop", resp["finish_reason"])
+	})
 
 	svc := NewService(db, testutil.Logger(t), nil)
 	inner := &chattest.FakeModel{
@@ -149,6 +296,20 @@ func TestDebugModel_GeneratePersistsAttemptsWithoutResponseClose(t *testing.T) {
 	}))
 	defer server.Close()
 
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationGenerate)
+	expectUpdateStep(t, db, stepID, chatID, StatusCompleted, func(params database.UpdateChatDebugStepParams) {
+		require.True(t, params.Attempts.Valid)
+		require.True(t, params.NormalizedResponse.Valid)
+		require.True(t, params.Usage.Valid)
+
+		var attempts []Attempt
+		require.NoError(t, json.Unmarshal(params.Attempts.RawMessage, &attempts))
+		require.Len(t, attempts, 1)
+		require.Equal(t, attemptStatusCompleted, attempts[0].Status)
+		require.Equal(t, http.StatusCreated, attempts[0].ResponseStatus)
+	})
+
 	svc := NewService(db, testutil.Logger(t), nil)
 	inner := &chattest.FakeModel{
 		GenerateFn: func(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
@@ -196,6 +357,16 @@ func TestDebugModel_GenerateError(t *testing.T) {
 	ownerID := uuid.New()
 	runID := uuid.New()
 	wantErr := &testError{message: "boom"}
+
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationGenerate)
+	expectUpdateStep(t, db, stepID, chatID, StatusError, func(params database.UpdateChatDebugStepParams) {
+		require.False(t, params.NormalizedResponse.Valid)
+		require.False(t, params.Usage.Valid)
+		require.True(t, params.Attempts.Valid)
+		require.True(t, params.Error.Valid)
+		require.False(t, params.Metadata.Valid)
+	})
 
 	svc := NewService(db, testutil.Logger(t), nil)
 	model := &debugModel{
@@ -252,6 +423,16 @@ func TestDebugModel_Stream(t *testing.T) {
 		{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop, Usage: fantasy.Usage{InputTokens: 8, OutputTokens: 3, TotalTokens: 11}},
 	}
 
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationStream)
+	expectUpdateStep(t, db, stepID, chatID, StatusError, func(params database.UpdateChatDebugStepParams) {
+		require.True(t, params.NormalizedResponse.Valid)
+		require.True(t, params.Usage.Valid)
+		require.True(t, params.Attempts.Valid)
+		require.True(t, params.Error.Valid)
+		require.True(t, params.Metadata.Valid)
+	})
+
 	svc := NewService(db, testutil.Logger(t), nil)
 	model := &debugModel{
 		inner: &chattest.FakeModel{
@@ -299,6 +480,18 @@ func TestDebugModel_StreamObject(t *testing.T) {
 		{Type: fantasy.ObjectStreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop, Usage: fantasy.Usage{InputTokens: 5, OutputTokens: 2, TotalTokens: 7}},
 	}
 
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationStream)
+	expectUpdateStep(t, db, stepID, chatID, StatusCompleted, func(params database.UpdateChatDebugStepParams) {
+		require.True(t, params.NormalizedResponse.Valid)
+		require.True(t, params.Usage.Valid)
+		require.True(t, params.Attempts.Valid)
+		// Clean successes (no prior error) leave the error column
+		// as SQL NULL rather than sending jsonClear.
+		require.False(t, params.Error.Valid)
+		require.True(t, params.Metadata.Valid)
+	})
+
 	svc := NewService(db, testutil.Logger(t), nil)
 	model := &debugModel{
 		inner: &chattest.FakeModel{
@@ -337,29 +530,47 @@ func TestDebugModel_StreamObject(t *testing.T) {
 func TestDebugModel_StreamCompletedAfterFinish(t *testing.T) {
 	t.Parallel()
 
-	handle := &stepHandle{
-		stepCtx: &StepContext{StepID: uuid.New(), RunID: uuid.New(), ChatID: uuid.New()},
-		sink:    &attemptSink{},
-	}
-
+	ctrl := gomock.NewController(t)
+	db := dbmock.NewMockStore(ctrl)
+	chatID := uuid.New()
+	ownerID := uuid.New()
+	runID := uuid.New()
 	parts := []fantasy.StreamPart{
 		{Type: fantasy.StreamPartTypeTextDelta, Delta: "hello"},
 		{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop, Usage: fantasy.Usage{InputTokens: 5, OutputTokens: 1, TotalTokens: 6}},
 	}
-	seq := wrapStreamSeq(context.Background(), handle, partsToSeq(parts))
 
-	// Consumer reads through the finish part then breaks. The wrapper
-	// should finalize as completed, not interrupted.
+	// The mock expectation for UpdateStep with StatusCompleted is the
+	// assertion: if the wrapper chose StatusInterrupted instead, the
+	// mock would reject the call.
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationStream)
+	expectUpdateStep(t, db, stepID, chatID, StatusCompleted, nil)
+
+	svc := NewService(db, testutil.Logger(t), nil)
+	model := &debugModel{
+		inner: &chattest.FakeModel{
+			StreamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+				return partsToSeq(parts), nil
+			},
+		},
+		svc:  svc,
+		opts: RecorderOptions{ChatID: chatID, OwnerID: ownerID},
+	}
+	t.Cleanup(func() { CleanupStepCounter(runID) })
+	ctx := ContextWithRun(context.Background(), &RunContext{RunID: runID, ChatID: chatID})
+
+	seq, err := model.Stream(ctx, fantasy.Call{})
+	require.NoError(t, err)
+
+	// Consumer reads the finish part then breaks -- this should still
+	// be considered a completed stream, not interrupted.
 	for part := range seq {
 		if part.Type == fantasy.StreamPartTypeFinish {
 			break
 		}
 	}
-
-	handle.mu.Lock()
-	status := handle.status
-	handle.mu.Unlock()
-	require.Equal(t, StatusCompleted, status)
+	// gomock verifies UpdateStep was called with StatusCompleted.
 }
 
 // TestDebugModel_StreamInterruptedBeforeFinish verifies that when a consumer
@@ -368,17 +579,38 @@ func TestDebugModel_StreamCompletedAfterFinish(t *testing.T) {
 func TestDebugModel_StreamInterruptedBeforeFinish(t *testing.T) {
 	t.Parallel()
 
-	handle := &stepHandle{
-		stepCtx: &StepContext{StepID: uuid.New(), RunID: uuid.New(), ChatID: uuid.New()},
-		sink:    &attemptSink{},
-	}
-
+	ctrl := gomock.NewController(t)
+	db := dbmock.NewMockStore(ctrl)
+	chatID := uuid.New()
+	ownerID := uuid.New()
+	runID := uuid.New()
 	parts := []fantasy.StreamPart{
 		{Type: fantasy.StreamPartTypeTextDelta, Delta: "hello"},
 		{Type: fantasy.StreamPartTypeTextDelta, Delta: " world"},
 		{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop},
 	}
-	seq := wrapStreamSeq(context.Background(), handle, partsToSeq(parts))
+
+	// The mock expectation for UpdateStep with StatusInterrupted is the
+	// assertion: breaking before the finish part means interrupted.
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationStream)
+	expectUpdateStep(t, db, stepID, chatID, StatusInterrupted, nil)
+
+	svc := NewService(db, testutil.Logger(t), nil)
+	model := &debugModel{
+		inner: &chattest.FakeModel{
+			StreamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+				return partsToSeq(parts), nil
+			},
+		},
+		svc:  svc,
+		opts: RecorderOptions{ChatID: chatID, OwnerID: ownerID},
+	}
+	t.Cleanup(func() { CleanupStepCounter(runID) })
+	ctx := ContextWithRun(context.Background(), &RunContext{RunID: runID, ChatID: chatID})
+
+	seq, err := model.Stream(ctx, fantasy.Call{})
+	require.NoError(t, err)
 
 	// Consumer reads the first delta then breaks before finish.
 	count := 0
@@ -389,11 +621,7 @@ func TestDebugModel_StreamInterruptedBeforeFinish(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, count)
-
-	handle.mu.Lock()
-	status := handle.status
-	handle.mu.Unlock()
-	require.Equal(t, StatusInterrupted, status)
+	// gomock verifies UpdateStep was called with StatusInterrupted.
 }
 
 func TestDebugModel_StreamRejectsNilSequence(t *testing.T) {
@@ -402,7 +630,19 @@ func TestDebugModel_StreamRejectsNilSequence(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	db := dbmock.NewMockStore(ctrl)
 	chatID := uuid.New()
+	ownerID := uuid.New()
 	runID := uuid.New()
+
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationStream)
+	expectUpdateStep(t, db, stepID, chatID, StatusError, func(params database.UpdateChatDebugStepParams) {
+		require.False(t, params.NormalizedResponse.Valid)
+		require.False(t, params.Usage.Valid)
+		require.True(t, params.Attempts.Valid)
+		require.True(t, params.Error.Valid)
+		require.False(t, params.Metadata.Valid)
+	})
+
 	svc := NewService(db, testutil.Logger(t), nil)
 	model := &debugModel{
 		inner: &chattest.FakeModel{
@@ -412,9 +652,10 @@ func TestDebugModel_StreamRejectsNilSequence(t *testing.T) {
 			},
 		},
 		svc:  svc,
-		opts: RecorderOptions{ChatID: chatID, OwnerID: uuid.New()},
+		opts: RecorderOptions{ChatID: chatID, OwnerID: ownerID},
 	}
 	t.Cleanup(func() { CleanupStepCounter(runID) })
+
 	ctx := ContextWithRun(context.Background(), &RunContext{RunID: runID, ChatID: chatID})
 
 	seq, err := model.Stream(ctx, fantasy.Call{})
@@ -428,7 +669,19 @@ func TestDebugModel_StreamObjectRejectsNilSequence(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	db := dbmock.NewMockStore(ctrl)
 	chatID := uuid.New()
+	ownerID := uuid.New()
 	runID := uuid.New()
+
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationStream)
+	expectUpdateStep(t, db, stepID, chatID, StatusError, func(params database.UpdateChatDebugStepParams) {
+		require.False(t, params.NormalizedResponse.Valid)
+		require.False(t, params.Usage.Valid)
+		require.True(t, params.Attempts.Valid)
+		require.True(t, params.Error.Valid)
+		require.True(t, params.Metadata.Valid)
+	})
+
 	svc := NewService(db, testutil.Logger(t), nil)
 	model := &debugModel{
 		inner: &chattest.FakeModel{
@@ -438,9 +691,10 @@ func TestDebugModel_StreamObjectRejectsNilSequence(t *testing.T) {
 			},
 		},
 		svc:  svc,
-		opts: RecorderOptions{ChatID: chatID, OwnerID: uuid.New()},
+		opts: RecorderOptions{ChatID: chatID, OwnerID: ownerID},
 	}
 	t.Cleanup(func() { CleanupStepCounter(runID) })
+
 	ctx := ContextWithRun(context.Background(), &RunContext{RunID: runID, ChatID: chatID})
 
 	seq, err := model.StreamObject(ctx, fantasy.ObjectCall{})
@@ -460,6 +714,16 @@ func TestDebugModel_StreamEarlyStop(t *testing.T) {
 		{Type: fantasy.StreamPartTypeTextDelta, Delta: "first"},
 		{Type: fantasy.StreamPartTypeTextDelta, Delta: "second"},
 	}
+
+	expectDebugLoggingEnabled(t, db, ownerID)
+	stepID := expectCreateStep(t, db, runID, chatID, OperationStream)
+	expectUpdateStep(t, db, stepID, chatID, StatusInterrupted, func(params database.UpdateChatDebugStepParams) {
+		require.True(t, params.NormalizedResponse.Valid)
+		require.False(t, params.Usage.Valid)
+		require.True(t, params.Attempts.Valid)
+		require.False(t, params.Error.Valid)
+		require.True(t, params.Metadata.Valid)
+	})
 
 	svc := NewService(db, testutil.Logger(t), nil)
 	model := &debugModel{
