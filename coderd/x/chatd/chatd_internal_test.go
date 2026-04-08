@@ -1295,12 +1295,12 @@ func TestSubscribeSkipsDatabaseCatchupForLocallyDeliveredMessage(t *testing.T) {
 	}
 
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
 		}).Return([]database.ChatMessage{initialMessage}, nil),
 		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
-		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 	)
 
 	server := newSubscribeTestServer(t, db)
@@ -1338,12 +1338,12 @@ func TestSubscribeUsesDurableCacheWhenLocalMessageWasNotDelivered(t *testing.T) 
 	}
 
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
 		}).Return([]database.ChatMessage{initialMessage}, nil),
 		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
-		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 	)
 
 	server := newSubscribeTestServer(t, db)
@@ -1389,12 +1389,12 @@ func TestSubscribeQueriesDatabaseWhenDurableCacheMisses(t *testing.T) {
 	}
 
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
 		}).Return([]database.ChatMessage{initialMessage}, nil),
 		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
-		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 1,
@@ -1438,12 +1438,12 @@ func TestSubscribeFullRefreshStillUsesDatabaseCatchup(t *testing.T) {
 	}
 
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
 		}).Return([]database.ChatMessage{initialMessage}, nil),
 		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
-		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
@@ -1475,12 +1475,12 @@ func TestSubscribeDeliversRetryEventViaPubsubOnce(t *testing.T) {
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
 
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
 		}).Return(nil, nil),
 		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
-		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 	)
 
 	server := newSubscribeTestServer(t, db)
@@ -1519,12 +1519,12 @@ func TestSubscribePrefersStructuredErrorPayloadViaPubsub(t *testing.T) {
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
 
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
 		}).Return(nil, nil),
 		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
-		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 	)
 
 	server := newSubscribeTestServer(t, db)
@@ -1559,12 +1559,12 @@ func TestSubscribeFallsBackToLegacyErrorStringViaPubsub(t *testing.T) {
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
 
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
 		}).Return(nil, nil),
 		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
-		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 	)
 
 	server := newSubscribeTestServer(t, db)
@@ -1679,6 +1679,28 @@ func TestGetStreamChatMessagesCanceledWaiterDoesNotPoisonOthers(t *testing.T) {
 	case <-time.After(testutil.WaitShort):
 		t.Fatal("surviving waiter did not return")
 	}
+}
+
+func TestSubscribeRejectsUnauthorizedCallerBeforeSharedFetches(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitShort)
+	ctrl := gomock.NewController(t)
+	db := dbmock.NewMockStore(ctrl)
+	server := newSubscribeTestServer(t, db)
+
+	chatID := uuid.New()
+	db.EXPECT().GetChatByID(gomock.Any(), chatID).
+		Return(database.Chat{}, xerrors.New("not authorized"))
+
+	snapshot, events, cancel, ok := server.Subscribe(ctx, chatID, nil, 0)
+	require.False(t, ok)
+	require.Nil(t, snapshot)
+	require.Nil(t, events)
+	require.Nil(t, cancel)
+
+	_, exists := server.chatStreams.Load(chatID)
+	require.False(t, exists)
 }
 
 func newSubscribeTestServer(t *testing.T, db database.Store) *Server {
