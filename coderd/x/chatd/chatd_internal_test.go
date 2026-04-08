@@ -1296,6 +1296,7 @@ func TestSubscribeSkipsDatabaseCatchupForLocallyDeliveredMessage(t *testing.T) {
 	}
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
@@ -1337,6 +1338,7 @@ func TestSubscribeUsesDurableCacheWhenLocalMessageWasNotDelivered(t *testing.T) 
 		Role:   codersdk.ChatMessageRoleAssistant,
 	}
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
@@ -1388,6 +1390,7 @@ func TestSubscribeQueriesDatabaseWhenDurableCacheMisses(t *testing.T) {
 	}
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
@@ -1436,6 +1439,7 @@ func TestSubscribeFullRefreshStillUsesDatabaseCatchup(t *testing.T) {
 	}
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
@@ -1471,6 +1475,7 @@ func TestSubscribeDeliversRetryEventViaPubsubOnce(t *testing.T) {
 	chatID := uuid.New()
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
 	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
@@ -1515,6 +1520,7 @@ func TestSubscribePrefersStructuredErrorPayloadViaPubsub(t *testing.T) {
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
@@ -1554,6 +1560,7 @@ func TestSubscribeFallsBackToLegacyErrorStringViaPubsub(t *testing.T) {
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
 			ChatID:  chatID,
 			AfterID: 0,
@@ -1572,6 +1579,54 @@ func TestSubscribeFallsBackToLegacyErrorStringViaPubsub(t *testing.T) {
 
 	event := requireStreamErrorEvent(t, events)
 	require.Equal(t, &codersdk.ChatStreamError{Message: "legacy error only"}, event.Error)
+	requireNoStreamEvent(t, events, 200*time.Millisecond)
+}
+
+func TestSubscribeAuthorizedRefreshesStatusBeforeBufferedMessageParts(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitShort)
+	ctrl := gomock.NewController(t)
+	db := dbmock.NewMockStore(ctrl)
+	server := newSubscribeTestServer(t, db)
+
+	chatID := uuid.New()
+	staleChat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
+	snapshotChat := staleChat
+	snapshotChat.Status = database.ChatStatusRunning
+
+	state := server.getOrCreateStreamState(chatID)
+	state.mu.Lock()
+	state.buffer = []codersdk.ChatStreamEvent{{
+		Type:   codersdk.ChatStreamEventTypeMessagePart,
+		ChatID: chatID,
+		MessagePart: &codersdk.ChatStreamMessagePart{
+			Role: "assistant",
+			Part: codersdk.ChatMessageText("thinking"),
+		},
+	}}
+	state.mu.Unlock()
+
+	gomock.InOrder(
+		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(snapshotChat, nil),
+		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
+			ChatID:  chatID,
+			AfterID: 0,
+		}).Return(nil, nil),
+		db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil),
+	)
+
+	initialSnapshot, events, cancel, ok := server.SubscribeAuthorized(ctx, staleChat, nil, 0)
+	require.True(t, ok)
+	defer cancel()
+
+	require.Len(t, initialSnapshot, 2)
+	require.Equal(t, codersdk.ChatStreamEventTypeStatus, initialSnapshot[0].Type)
+	require.NotNil(t, initialSnapshot[0].Status)
+	require.Equal(t, codersdk.ChatStatusRunning, initialSnapshot[0].Status.Status)
+	require.Equal(t, codersdk.ChatStreamEventTypeMessagePart, initialSnapshot[1].Type)
+	require.NotNil(t, initialSnapshot[1].MessagePart)
+	require.Equal(t, "thinking", initialSnapshot[1].MessagePart.Part.Text)
 	requireNoStreamEvent(t, events, 200*time.Millisecond)
 }
 
@@ -1724,16 +1779,16 @@ func TestSubscribeSurfacesTransientLookupFailureAsInitialError(t *testing.T) {
 	require.False(t, exists)
 }
 
-func TestStreamFetchContextPreservesDeadlineOrAppliesFallback(t *testing.T) {
+func TestStreamFetchContextsUseWorkloadSpecificDeadlinePolicies(t *testing.T) {
 	t.Parallel()
 
-	t.Run("PreservesDeadline", func(t *testing.T) {
+	t.Run("HistoryPreservesDeadline", func(t *testing.T) {
 		t.Parallel()
 
 		parent, parentCancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute))
 		defer parentCancel()
 
-		fetchCtx, fetchCancel := streamFetchContext(parent)
+		fetchCtx, fetchCancel := streamHistoryFetchContext(parent)
 		defer fetchCancel()
 
 		wantDeadline, ok := parent.Deadline()
@@ -1743,16 +1798,42 @@ func TestStreamFetchContextPreservesDeadlineOrAppliesFallback(t *testing.T) {
 		require.Equal(t, wantDeadline, gotDeadline)
 	})
 
-	t.Run("AppliesFallbackTimeout", func(t *testing.T) {
+	t.Run("HistoryKeepsNoDeadline", func(t *testing.T) {
+		t.Parallel()
+
+		fetchCtx, fetchCancel := streamHistoryFetchContext(context.Background())
+		defer fetchCancel()
+
+		_, ok := fetchCtx.Deadline()
+		require.False(t, ok)
+	})
+
+	t.Run("ControlPreservesDeadline", func(t *testing.T) {
+		t.Parallel()
+
+		parent, parentCancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute))
+		defer parentCancel()
+
+		fetchCtx, fetchCancel := streamControlFetchContext(parent)
+		defer fetchCancel()
+
+		wantDeadline, ok := parent.Deadline()
+		require.True(t, ok)
+		gotDeadline, ok := fetchCtx.Deadline()
+		require.True(t, ok)
+		require.Equal(t, wantDeadline, gotDeadline)
+	})
+
+	t.Run("ControlAppliesFallbackTimeout", func(t *testing.T) {
 		t.Parallel()
 
 		started := time.Now()
-		fetchCtx, fetchCancel := streamFetchContext(context.Background())
+		fetchCtx, fetchCancel := streamControlFetchContext(context.Background())
 		defer fetchCancel()
 
 		deadline, ok := fetchCtx.Deadline()
 		require.True(t, ok)
-		require.WithinDuration(t, started.Add(chatStreamFetchTimeout), deadline, 250*time.Millisecond)
+		require.WithinDuration(t, started.Add(chatStreamControlFetchTimeout), deadline, 250*time.Millisecond)
 	})
 }
 
