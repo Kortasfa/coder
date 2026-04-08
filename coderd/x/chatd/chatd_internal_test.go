@@ -18,6 +18,7 @@ import (
 	"cdr.dev/slog/v3"
 	"cdr.dev/slog/v3/sloggers/slogtest"
 	"github.com/coder/coder/v2/coderd/database"
+	"github.com/coder/coder/v2/coderd/database/dbauthz"
 	"github.com/coder/coder/v2/coderd/database/dbmock"
 	dbpubsub "github.com/coder/coder/v2/coderd/database/pubsub"
 	coderdpubsub "github.com/coder/coder/v2/coderd/pubsub"
@@ -1293,7 +1294,6 @@ func TestSubscribeSkipsDatabaseCatchupForLocallyDeliveredMessage(t *testing.T) {
 		ChatID: chatID,
 		Role:   database.ChatMessageRoleAssistant,
 	}
-
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
@@ -1336,7 +1336,6 @@ func TestSubscribeUsesDurableCacheWhenLocalMessageWasNotDelivered(t *testing.T) 
 		ChatID: chatID,
 		Role:   codersdk.ChatMessageRoleAssistant,
 	}
-
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
@@ -1387,7 +1386,6 @@ func TestSubscribeQueriesDatabaseWhenDurableCacheMisses(t *testing.T) {
 		ChatID: chatID,
 		Role:   database.ChatMessageRoleAssistant,
 	}
-
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
@@ -1436,7 +1434,6 @@ func TestSubscribeFullRefreshStillUsesDatabaseCatchup(t *testing.T) {
 		ChatID: chatID,
 		Role:   database.ChatMessageRoleUser,
 	}
-
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
@@ -1473,7 +1470,6 @@ func TestSubscribeDeliversRetryEventViaPubsubOnce(t *testing.T) {
 
 	chatID := uuid.New()
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
-
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
@@ -1517,7 +1513,6 @@ func TestSubscribePrefersStructuredErrorPayloadViaPubsub(t *testing.T) {
 
 	chatID := uuid.New()
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
-
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
@@ -1557,7 +1552,6 @@ func TestSubscribeFallsBackToLegacyErrorStringViaPubsub(t *testing.T) {
 
 	chatID := uuid.New()
 	chat := database.Chat{ID: chatID, Status: database.ChatStatusPending}
-
 	gomock.InOrder(
 		db.EXPECT().GetChatByID(gomock.Any(), chatID).Return(chat, nil),
 		db.EXPECT().GetChatMessagesByChatID(gomock.Any(), database.GetChatMessagesByChatIDParams{
@@ -1691,7 +1685,7 @@ func TestSubscribeRejectsUnauthorizedCallerBeforeSharedFetches(t *testing.T) {
 
 	chatID := uuid.New()
 	db.EXPECT().GetChatByID(gomock.Any(), chatID).
-		Return(database.Chat{}, xerrors.New("not authorized"))
+		Return(database.Chat{}, dbauthz.NotAuthorizedError{Err: xerrors.New("not authorized")})
 
 	snapshot, events, cancel, ok := server.Subscribe(ctx, chatID, nil, 0)
 	require.False(t, ok)
@@ -1701,6 +1695,65 @@ func TestSubscribeRejectsUnauthorizedCallerBeforeSharedFetches(t *testing.T) {
 
 	_, exists := server.chatStreams.Load(chatID)
 	require.False(t, exists)
+}
+
+func TestSubscribeSurfacesTransientLookupFailureAsInitialError(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitShort)
+	ctrl := gomock.NewController(t)
+	db := dbmock.NewMockStore(ctrl)
+	server := newSubscribeTestServer(t, db)
+
+	chatID := uuid.New()
+	db.EXPECT().GetChatByID(gomock.Any(), chatID).
+		Return(database.Chat{}, xerrors.New("transient lookup failure"))
+
+	snapshot, events, cancel, ok := server.Subscribe(ctx, chatID, nil, 0)
+	require.True(t, ok)
+	require.NotNil(t, cancel)
+	require.Len(t, snapshot, 1)
+	require.Equal(t, codersdk.ChatStreamEventTypeError, snapshot[0].Type)
+	require.Equal(t, chatID, snapshot[0].ChatID)
+	require.Equal(t, "failed to load initial snapshot", snapshot[0].Error.Message)
+
+	_, open := <-events
+	require.False(t, open)
+
+	_, exists := server.chatStreams.Load(chatID)
+	require.False(t, exists)
+}
+
+func TestStreamFetchContextPreservesDeadlineOrAppliesFallback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PreservesDeadline", func(t *testing.T) {
+		t.Parallel()
+
+		parent, parentCancel := context.WithDeadline(context.Background(), time.Now().Add(time.Minute))
+		defer parentCancel()
+
+		fetchCtx, fetchCancel := streamFetchContext(parent)
+		defer fetchCancel()
+
+		wantDeadline, ok := parent.Deadline()
+		require.True(t, ok)
+		gotDeadline, ok := fetchCtx.Deadline()
+		require.True(t, ok)
+		require.Equal(t, wantDeadline, gotDeadline)
+	})
+
+	t.Run("AppliesFallbackTimeout", func(t *testing.T) {
+		t.Parallel()
+
+		started := time.Now()
+		fetchCtx, fetchCancel := streamFetchContext(context.Background())
+		defer fetchCancel()
+
+		deadline, ok := fetchCtx.Deadline()
+		require.True(t, ok)
+		require.WithinDuration(t, started.Add(chatStreamFetchTimeout), deadline, 250*time.Millisecond)
+	})
 }
 
 func newSubscribeTestServer(t *testing.T, db database.Store) *Server {

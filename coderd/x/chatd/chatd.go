@@ -97,6 +97,9 @@ const (
 	// cross-replica relay subscribers time to connect and
 	// snapshot the buffer before it is garbage-collected.
 	bufferRetainGracePeriod = 5 * time.Second
+	// chatStreamFetchTimeout bounds detached singleflight-backed
+	// DB reads when the caller context has no deadline.
+	chatStreamFetchTimeout = 5 * time.Second
 
 	// DefaultMaxChatsPerAcquire is the maximum number of chats to
 	// acquire in a single processOnce call. Batching avoids
@@ -3189,14 +3192,18 @@ func cloneQueuedMessagesForStream(messages []database.ChatQueuedMessage) []datab
 	return cloned
 }
 
-// streamFetchContext preserves request-scoped trace values while removing
-// cancellation so one disconnecting subscriber does not poison other waiters
-// sharing the same singleflight entry.
-func streamFetchContext(ctx context.Context) context.Context {
+// streamFetchContext detaches subscriber cancellation from a shared fetch while
+// preserving any existing deadline. When the caller has no deadline, it applies
+// a bounded timeout so the leader cannot run an unbounded DB query.
+func streamFetchContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
-		return context.Background()
+		return context.WithTimeout(context.Background(), chatStreamFetchTimeout)
 	}
-	return context.WithoutCancel(ctx)
+	detached := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(detached, deadline)
+	}
+	return context.WithTimeout(detached, chatStreamFetchTimeout)
 }
 
 // getStreamChatMessages loads durable chat messages for an already-authorized
@@ -3215,10 +3222,12 @@ func (p *Server) getStreamChatMessages(
 		&p.streamMessageFetches,
 		fmt.Sprintf("chat-messages:%s:after:%d", params.ChatID, params.AfterID),
 		func() ([]database.ChatMessage, error) {
-			//nolint:gocritic // Subscribe already authorized the caller; the
-			// shared singleflight fetch runs as chatd so the leader's request
-			// identity cannot affect other authorized waiters.
-			return p.db.GetChatMessagesByChatID(dbauthz.AsChatd(streamFetchContext(ctx)), params)
+			fetchCtx, cancel := streamFetchContext(ctx)
+			defer cancel()
+			//nolint:gocritic // SubscribeAuthorized already validated the
+			// caller; the shared singleflight fetch runs as chatd so the
+			// leader's request identity cannot affect other authorized waiters.
+			return p.db.GetChatMessagesByChatID(dbauthz.AsChatd(fetchCtx), params)
 		},
 	)
 	if err != nil {
@@ -3243,16 +3252,33 @@ func (p *Server) getStreamQueuedMessages(
 		&p.streamQueueFetches,
 		fmt.Sprintf("chat-queue:%s", chatID),
 		func() ([]database.ChatQueuedMessage, error) {
-			//nolint:gocritic // Subscribe already authorized the caller; the
-			// shared singleflight fetch runs as chatd so the leader's request
-			// identity cannot affect other authorized waiters.
-			return p.db.GetChatQueuedMessages(dbauthz.AsChatd(streamFetchContext(ctx)), chatID)
+			fetchCtx, cancel := streamFetchContext(ctx)
+			defer cancel()
+			//nolint:gocritic // SubscribeAuthorized already validated the
+			// caller; the shared singleflight fetch runs as chatd so the
+			// leader's request identity cannot affect other authorized waiters.
+			return p.db.GetChatQueuedMessages(dbauthz.AsChatd(fetchCtx), chatID)
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
 	return cloneQueuedMessagesForStream(queued), nil
+}
+
+func subscribeWithInitialError(chatID uuid.UUID, message string) (
+	[]codersdk.ChatStreamEvent,
+	<-chan codersdk.ChatStreamEvent,
+	func(),
+	bool,
+) {
+	events := make(chan codersdk.ChatStreamEvent)
+	close(events)
+	return []codersdk.ChatStreamEvent{{
+		Type:   codersdk.ChatStreamEventTypeError,
+		ChatID: chatID,
+		Error:  &codersdk.ChatStreamError{Message: message},
+	}}, events, func() {}, true
 }
 
 func (p *Server) Subscribe(
@@ -3272,6 +3298,41 @@ func (p *Server) Subscribe(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+
+	chat, err := p.db.GetChatByID(ctx, chatID)
+	if err != nil {
+		if dbauthz.IsNotAuthorizedError(err) {
+			return nil, nil, nil, false
+		}
+		p.logger.Warn(ctx, "failed to load chat for stream subscription",
+			slog.F("chat_id", chatID),
+			slog.Error(err),
+		)
+		return subscribeWithInitialError(chatID, "failed to load initial snapshot")
+	}
+	return p.SubscribeAuthorized(ctx, chat, requestHeader, afterMessageID)
+}
+
+// SubscribeAuthorized subscribes an already-authorized chat to merged stream
+// updates.
+func (p *Server) SubscribeAuthorized(
+	ctx context.Context,
+	chat database.Chat,
+	requestHeader http.Header,
+	afterMessageID int64,
+) (
+	[]codersdk.ChatStreamEvent,
+	<-chan codersdk.ChatStreamEvent,
+	func(),
+	bool,
+) {
+	if p == nil {
+		return nil, nil, nil, false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	chatID := chat.ID
 
 	// Subscribe to the local stream for message_parts and same-replica
 	// persisted messages.
@@ -3344,21 +3405,6 @@ func (p *Server) Subscribe(
 		}
 	}
 
-	// Authorize this subscriber with its own request context before any
-	// singleflight-backed reads return shared stream data. The HTTP route
-	// already does this via middleware, but Subscribe is also used directly in
-	// tests and internal paths. Once this check passes, the shared helpers may
-	// safely run under a privileged chatd context.
-	authorizedChat, err := p.db.GetChatByID(ctx, chatID)
-	if err != nil {
-		p.logger.Warn(ctx, "failed to authorize chat stream subscriber",
-			slog.F("chat_id", chatID),
-			slog.Error(err),
-		)
-		cancel()
-		return nil, nil, nil, false
-	}
-
 	// Build initial snapshot synchronously. The pubsub subscription
 	// is already active so no notifications can be lost during this
 	// window.
@@ -3426,7 +3472,7 @@ func (p *Server) Subscribe(
 		Type:   codersdk.ChatStreamEventTypeStatus,
 		ChatID: chatID,
 		Status: &codersdk.ChatStreamStatus{
-			Status: codersdk.ChatStatus(authorizedChat.Status),
+			Status: codersdk.ChatStatus(chat.Status),
 		},
 	}
 	// Prepend so the frontend sees the status before any message_part events.
@@ -3450,7 +3496,7 @@ func (p *Server) Subscribe(
 		statusNotifications = make(chan StatusNotification, 10)
 		relayEvents = p.subscribeFn(mergedCtx, SubscribeFnParams{
 			ChatID:              chatID,
-			Chat:                authorizedChat,
+			Chat:                chat,
 			WorkerID:            p.workerID,
 			StatusNotifications: statusNotifications,
 			RequestHeader:       requestHeader,
