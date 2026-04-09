@@ -65,7 +65,7 @@ Create metrics with `NewMetrics(prometheus.Registerer)`:
 
 ### Recorder Interface
 
-Implement `Recorder` to persist usage data to your database. The example uses SQLite ([example/recorder.go](example/recorder.go)):
+Implement `Recorder` to persist usage data to your database:
 
 - `aibridge_interceptions` - request metadata (provider, model, initiator, timestamps)
 - `aibridge_token_usages` - input/output token counts per response
@@ -81,44 +81,6 @@ type Recorder interface {
     RecordToolUsage(ctx context.Context, req *ToolUsageRecord) error
 }
 ```
-
-## Example
-
-See [example/](example/) for a complete runnable example with SQLite persistence and [DeepWiki](https://mcp.deepwiki.com) MCP integration.
-
-### Setup
-
-1. **Get API keys** from the provider consoles:
-   - Anthropic: https://console.anthropic.com/settings/keys
-   - OpenAI: https://platform.openai.com/api-keys
-
-2. **Set environment variables**:
-   ```bash
-   export ANTHROPIC_API_KEY="sk-ant-..."
-   export OPENAI_API_KEY="sk-..."
-   ```
-
-3. **Run the example**:
-   ```bash
-   cd example && go run .
-   ```
-
-4. **Test with curl**:
-   ```bash
-   curl -X POST http://localhost:8080/anthropic/v1/messages \
-     -H "Content-Type: application/json" \
-     -d '{
-       "model": "claude-sonnet-4-20250514",
-       "max_tokens": 1024,
-       "messages": [{"role": "user", "content": "Hello!"}],
-       "stream": true
-     }'
-   ```
-
-5. **Test with Claude Code**:
-   Claude Code allows a base URL override via `ANTHROPIC_BASE_URL`.
-
-   ![image with cloude code example](example/claude-code.png)
 
 ## Supported Routes
 
