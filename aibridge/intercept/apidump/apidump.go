@@ -12,13 +12,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
+	"github.com/tidwall/pretty"
 	"golang.org/x/xerrors"
 
 	"cdr.dev/slog/v3"
-
-	"github.com/google/uuid"
-	"github.com/tidwall/pretty"
-
 	"github.com/coder/quartz"
 )
 
