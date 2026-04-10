@@ -10,6 +10,10 @@ import {
 	TooltipTrigger,
 } from "#/components/Tooltip/Tooltip";
 import { cn } from "#/utils/cn";
+import {
+	type AskUserQuestion,
+	AskUserQuestionTool,
+} from "./AskUserQuestionTool";
 import { ChatSummarizedTool } from "./ChatSummarizedTool";
 import { ComputerTool } from "./ComputerTool";
 import { CreateWorkspaceTool } from "./CreateWorkspaceTool";
@@ -99,6 +103,84 @@ type ToolRendererProps = {
 // ---------------------------------------------------------------------------
 // Tool-specific renderer functions
 // ---------------------------------------------------------------------------
+
+const parseAskUserQuestionOptions = (
+	value: unknown,
+): AskUserQuestion["options"] | null => {
+	if (!Array.isArray(value)) {
+		return null;
+	}
+
+	const options: AskUserQuestion["options"] = [];
+	for (const option of value) {
+		const optionRecord = asRecord(option);
+		if (!optionRecord) {
+			continue;
+		}
+
+		options.push({
+			label: asString(optionRecord.label).trim(),
+			description: asString(optionRecord.description).trim(),
+		});
+	}
+
+	return options;
+};
+
+const parseAskUserQuestions = (value: unknown): AskUserQuestion[] | null => {
+	if (!Array.isArray(value)) {
+		return null;
+	}
+
+	const questions: AskUserQuestion[] = [];
+	for (const question of value) {
+		const questionRecord = asRecord(question);
+		if (!questionRecord) {
+			continue;
+		}
+
+		questions.push({
+			header: asString(questionRecord.header).trim(),
+			question: asString(questionRecord.question).trim(),
+			options: parseAskUserQuestionOptions(questionRecord.options) ?? [],
+		});
+	}
+
+	return questions;
+};
+
+const parseAskUserQuestionResult = (
+	result: unknown,
+): AskUserQuestion[] | null => {
+	const parsedResult = parseArgs(result);
+	const directQuestions = parsedResult
+		? parseAskUserQuestions(parsedResult.questions)
+		: null;
+	if (directQuestions) {
+		return directQuestions;
+	}
+
+	const resultRecord = asRecord(result);
+	if (!resultRecord) {
+		return null;
+	}
+
+	for (const value of [
+		resultRecord.output,
+		resultRecord.content,
+		resultRecord.text,
+	]) {
+		const parsedValue = parseArgs(value);
+		const questions = parsedValue
+			? parseAskUserQuestions(parsedValue.questions)
+			: null;
+		if (questions) {
+			return questions;
+		}
+	}
+
+	return null;
+};
 
 const ExecuteRenderer: FC<ToolRendererProps> = ({
 	status,
@@ -495,6 +577,39 @@ const ChatSummarizedRenderer: FC<ToolRendererProps> = ({
 	);
 };
 
+const AskUserQuestionRenderer: FC<ToolRendererProps> = ({
+	args,
+	status,
+	result,
+	isError,
+}) => {
+	const parsedArgs = parseArgs(args);
+	const questionsFromArgs = parsedArgs
+		? parseAskUserQuestions(parsedArgs.questions)
+		: null;
+	const questionsFromResult = parseAskUserQuestionResult(result);
+	const questions =
+		questionsFromArgs && questionsFromArgs.length > 0
+			? questionsFromArgs
+			: questionsFromResult && questionsFromResult.length > 0
+				? questionsFromResult
+				: (questionsFromArgs ?? questionsFromResult ?? []);
+	const resultRecord = asRecord(result);
+	const errorMessage =
+		(resultRecord
+			? asString(resultRecord.error || resultRecord.message)
+			: "") || (typeof result === "string" && isError ? result : "");
+
+	return (
+		<AskUserQuestionTool
+			questions={questions}
+			status={status}
+			isError={isError}
+			errorMessage={errorMessage || undefined}
+		/>
+	);
+};
+
 const ProposePlanRenderer: FC<ToolRendererProps> = ({
 	args,
 	status,
@@ -761,6 +876,7 @@ const toolRenderers: Record<string, FC<ToolRendererProps>> = {
 	close_agent: SubagentRenderer,
 	spawn_computer_use_agent: SubagentRenderer,
 	chat_summarized: ChatSummarizedRenderer,
+	ask_user_question: AskUserQuestionRenderer,
 	propose_plan: ProposePlanRenderer,
 	computer: ComputerRenderer,
 };
