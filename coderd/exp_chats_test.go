@@ -651,6 +651,7 @@ func TestPostChats(t *testing.T) {
 		requireChatUsageLimitExceededError(t, err, 100, 100, wantResetsAt)
 	})
 
+
 	t.Run("InvalidTurnMode", func(t *testing.T) {
 		t.Parallel()
 
@@ -788,144 +789,7 @@ func TestPostChats(t *testing.T) {
 		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
 		require.Equal(t, "Workspace does not belong to the specified organization.", sdkErr.Message)
 	})
-		t.Parallel()
 
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-<<<<<<< HEAD
-		firstUser := coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		memberClientRaw, _ := coderdtest.CreateAnotherUser(t, client.Client, firstUser.OrganizationID, rbac.RoleAgentsAccess())
-		memberClient := codersdk.NewExperimentalClient(memberClientRaw)
-
-		_, err := memberClient.CreateChat(ctx, codersdk.CreateChatRequest{
-			OrganizationID: uuid.Nil,
-			Content: []codersdk.ChatInputPart{
-				{
-					Type: codersdk.ChatInputPartTypeText,
-					Text: "hello",
-				},
-			},
-		})
-		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
-		require.Equal(t, "organization_id is required.", sdkErr.Message)
-	})
-
-	t.Run("NonMemberOrganization", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client, db := newChatClientWithDatabase(t)
-		firstUser := coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		memberClientRaw, _ := coderdtest.CreateAnotherUser(t, client.Client, firstUser.OrganizationID, rbac.RoleAgentsAccess())
-		memberClient := codersdk.NewExperimentalClient(memberClientRaw)
-
-		// Create a second organization via the database since the
-		// API endpoint is enterprise-only.
-		secondOrg := dbgen.Organization(t, db, database.Organization{})
-
-		_, err := memberClient.CreateChat(ctx, codersdk.CreateChatRequest{
-			OrganizationID: secondOrg.ID,
-			Content: []codersdk.ChatInputPart{
-				{
-					Type: codersdk.ChatInputPartTypeText,
-					Text: "hello",
-				},
-			},
-		})
-		sdkErr := requireSDKError(t, err, http.StatusForbidden)
-		require.Equal(t, "You are not a member of the specified organization.", sdkErr.Message)
-	})
-
-	t.Run("CrossOrgWorkspaceMismatch", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client, db := newChatClientWithDatabase(t)
-		firstUser := coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		workspaceBuild := dbfake.WorkspaceBuild(t, db, database.WorkspaceTable{
-			OrganizationID: firstUser.OrganizationID,
-			OwnerID:        firstUser.UserID,
-		}).WithAgent().Do()
-
-		// Create a second organization and add the admin as a member
-		// so the request passes the membership check but fails on
-		// the workspace org mismatch.
-		secondOrg := dbgen.Organization(t, db, database.Organization{})
-		dbgen.OrganizationMember(t, db, database.OrganizationMember{
-			OrganizationID: secondOrg.ID,
-			UserID:         firstUser.UserID,
-		})
-
-		_, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			OrganizationID: secondOrg.ID,
-			Content: []codersdk.ChatInputPart{
-				{
-					Type: codersdk.ChatInputPartTypeText,
-					Text: "hello",
-				},
-			},
-			WorkspaceID: &workspaceBuild.Workspace.ID,
-		})
-		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
-		require.Equal(t, "Workspace does not belong to the specified organization.", sdkErr.Message)
-=======
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		_, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "some text",
-			}},
-			TurnMode: "invalid_mode",
-		})
-		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
-		require.Equal(t, "Invalid turn_mode value.", sdkErr.Message)
-	})
-
-	t.Run("ValidTurnModePlan", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		chat, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "some text",
-			}},
-			TurnMode: codersdk.ChatTurnModePlan,
-		})
-		require.NoError(t, err)
-		require.NotEqual(t, uuid.Nil, chat.ID)
-	})
-
-	t.Run("EmptyTurnMode", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		_, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "some text",
-			}},
-			TurnMode: "",
-		})
-		require.NoError(t, err)
->>>>>>> 8f0038fa11 (test(coderd): cover turn mode validation)
-	})
 }
 
 func TestListChats(t *testing.T) {
@@ -4126,6 +3990,80 @@ func TestUnarchiveChat(t *testing.T) {
 
 		err := client.UpdateChat(ctx, uuid.New(), codersdk.UpdateChatRequest{Archived: ptr.Ref(false)})
 		requireSDKError(t, err, http.StatusNotFound)
+	})
+}
+
+func TestChatWorkspaceBinding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("PatchBindsWorkspace", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := testutil.Context(t, testutil.WaitLong)
+		client, db := newChatClientWithDatabase(t)
+		user := coderdtest.CreateFirstUser(t, client.Client)
+		_ = createChatModelConfig(t, client)
+
+		workspaceBuild := dbfake.WorkspaceBuild(t, db, database.WorkspaceTable{
+			OrganizationID: user.OrganizationID,
+			OwnerID:        user.UserID,
+		}).WithAgent().Do()
+
+		chat, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
+			Content: []codersdk.ChatInputPart{
+				{
+					Type: codersdk.ChatInputPartTypeText,
+					Text: "chat without workspace binding",
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Nil(t, chat.WorkspaceID)
+
+		err = client.UpdateChat(ctx, chat.ID, codersdk.UpdateChatRequest{
+			WorkspaceID: ptr.Ref(workspaceBuild.Workspace.ID),
+		})
+		require.NoError(t, err)
+
+		chat, err = client.GetChat(ctx, chat.ID)
+		require.NoError(t, err)
+		require.NotNil(t, chat.WorkspaceID)
+		require.Equal(t, workspaceBuild.Workspace.ID, *chat.WorkspaceID)
+	})
+
+	t.Run("PatchClearsWorkspaceWithNilUUID", func(t *testing.T) {
+		t.Parallel()
+
+		ctx := testutil.Context(t, testutil.WaitLong)
+		client, db := newChatClientWithDatabase(t)
+		user := coderdtest.CreateFirstUser(t, client.Client)
+		_ = createChatModelConfig(t, client)
+
+		workspaceBuild := dbfake.WorkspaceBuild(t, db, database.WorkspaceTable{
+			OrganizationID: user.OrganizationID,
+			OwnerID:        user.UserID,
+		}).WithAgent().Do()
+
+		chat, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
+			Content: []codersdk.ChatInputPart{
+				{
+					Type: codersdk.ChatInputPartTypeText,
+					Text: "chat with workspace binding",
+				},
+			},
+			WorkspaceID: ptr.Ref(workspaceBuild.Workspace.ID),
+		})
+		require.NoError(t, err)
+		require.NotNil(t, chat.WorkspaceID)
+
+		err = client.UpdateChat(ctx, chat.ID, codersdk.UpdateChatRequest{
+			WorkspaceID: ptr.Ref(uuid.Nil),
+		})
+		require.NoError(t, err)
+
+		chat, err = client.GetChat(ctx, chat.ID)
+		require.NoError(t, err)
+		require.Nil(t, chat.WorkspaceID)
 	})
 }
 

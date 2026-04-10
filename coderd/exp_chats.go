@@ -1740,7 +1740,7 @@ func (api *API) watchChatDesktop(rw http.ResponseWriter, r *http.Request) {
 }
 
 // patchChat updates a chat resource. Supports updating labels,
-// archiving, pinning, and pinned-chat ordering.
+// workspace binding, archiving, pinning, and pinned-chat ordering.
 func (api *API) patchChat(rw http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	chat := httpmw.ChatParam(r)
@@ -1873,6 +1873,38 @@ func (api *API) patchChat(rw http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	}
+
+	if req.WorkspaceID != nil {
+		workspaceID := uuid.NullUUID{}
+		if *req.WorkspaceID != uuid.Nil {
+			var status int
+			var resp *codersdk.Response
+			workspaceID, status, resp = api.validateChatWorkspaceSelection(ctx, r, req.WorkspaceID)
+			if resp != nil {
+				httpapi.Write(ctx, rw, status, *resp)
+				return
+			}
+		}
+
+		updatedChat, err := api.Database.UpdateChatWorkspaceBinding(ctx, database.UpdateChatWorkspaceBindingParams{
+			ID:          chat.ID,
+			WorkspaceID: workspaceID,
+			BuildID:     uuid.NullUUID{},
+			AgentID:     uuid.NullUUID{},
+		})
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				httpapi.ResourceNotFound(rw)
+				return
+			}
+			httpapi.Write(ctx, rw, http.StatusInternalServerError, codersdk.Response{
+				Message: "Failed to update chat workspace binding.",
+				Detail:  err.Error(),
+			})
+			return
+		}
+		chat = updatedChat
 	}
 
 	rw.WriteHeader(http.StatusNoContent)
@@ -2952,6 +2984,45 @@ type createChatWorkspaceSelection struct {
 	WorkspaceID uuid.NullUUID
 }
 
+func (api *API) validateChatWorkspaceSelection(
+	ctx context.Context,
+	r *http.Request,
+	workspaceID *uuid.UUID,
+) (
+	uuid.NullUUID,
+	int,
+	*codersdk.Response,
+) {
+	if workspaceID == nil {
+		return uuid.NullUUID{}, 0, nil
+	}
+
+	workspace, err := api.Database.GetWorkspaceByID(ctx, *workspaceID)
+	if err != nil {
+		if httpapi.Is404Error(err) {
+			return uuid.NullUUID{}, http.StatusBadRequest, &codersdk.Response{
+				Message: "Workspace not found or you do not have access to this resource",
+			}
+		}
+		return uuid.NullUUID{}, http.StatusInternalServerError, &codersdk.Response{
+			Message: "Failed to get workspace.",
+			Detail:  err.Error(),
+		}
+	}
+
+	selection := uuid.NullUUID{
+		UUID:  workspace.ID,
+		Valid: true,
+	}
+	if !api.Authorize(r, policy.ActionSSH, workspace) {
+		return uuid.NullUUID{}, http.StatusBadRequest, &codersdk.Response{
+			Message: "Workspace not found or you do not have access to this resource",
+		}
+	}
+
+	return selection, 0, nil
+}
+
 func (api *API) validateCreateChatWorkspaceSelection(
 	ctx context.Context,
 	r *http.Request,
@@ -2962,11 +3033,16 @@ func (api *API) validateCreateChatWorkspaceSelection(
 	*codersdk.Response,
 ) {
 	selection := createChatWorkspaceSelection{}
-	if req.WorkspaceID == nil {
+	workspaceID, status, resp := api.validateChatWorkspaceSelection(ctx, r, req.WorkspaceID)
+	if resp != nil {
+		return selection, status, resp
+	}
+	selection.WorkspaceID = workspaceID
+	if !workspaceID.Valid {
 		return selection, 0, nil
 	}
 
-	workspace, err := api.Database.GetWorkspaceByID(ctx, *req.WorkspaceID)
+	workspace, err := api.Database.GetWorkspaceByID(ctx, workspaceID.UUID)
 	if err != nil {
 		if httpapi.Is404Error(err) {
 			return selection, http.StatusBadRequest, &codersdk.Response{
@@ -2978,20 +3054,9 @@ func (api *API) validateCreateChatWorkspaceSelection(
 			Detail:  err.Error(),
 		}
 	}
-	selection.WorkspaceID = uuid.NullUUID{
-		UUID:  workspace.ID,
-		Valid: true,
-	}
-
 	if workspace.OrganizationID != req.OrganizationID {
 		return selection, http.StatusBadRequest, &codersdk.Response{
 			Message: "Workspace does not belong to the specified organization.",
-		}
-	}
-
-	if !api.Authorize(r, policy.ActionSSH, workspace) {
-		return selection, http.StatusBadRequest, &codersdk.Response{
-			Message: "Workspace not found or you do not have access to this resource",
 		}
 	}
 

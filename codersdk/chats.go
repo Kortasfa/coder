@@ -398,8 +398,9 @@ type CreateChatRequest struct {
 
 // UpdateChatRequest is the request to update a chat.
 type UpdateChatRequest struct {
-	Title    *string `json:"title,omitempty"`
-	Archived *bool   `json:"archived,omitempty"`
+	Title       *string    `json:"title,omitempty"`
+	Archived    *bool      `json:"archived,omitempty"`
+	WorkspaceID *uuid.UUID `json:"workspace_id,omitempty" format:"uuid"`
 	// PinOrder controls the chat's pinned state and position.
 	// - nil: no change to pin state.
 	// - 0: unpin the chat.
