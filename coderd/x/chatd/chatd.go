@@ -785,6 +785,7 @@ type CreateOptions struct {
 	Title              string
 	ModelConfigID      uuid.UUID
 	ChatMode           database.NullChatMode
+	TurnMode           string
 	SystemPrompt       string
 	InitialUserContent []codersdk.ChatMessagePart
 	MCPServerIDs       []uuid.UUID
@@ -812,6 +813,7 @@ type SendMessageOptions struct {
 	Content       []codersdk.ChatMessagePart
 	ModelConfigID *uuid.UUID
 	BusyBehavior  SendMessageBusyBehavior
+	TurnMode      string
 	MCPServerIDs  *[]uuid.UUID
 }
 
@@ -983,7 +985,7 @@ func (p *Server) CreateChat(ctx context.Context, opts CreateOptions) (database.C
 			database.ChatMessageVisibilityBoth,
 			opts.ModelConfigID,
 			chatprompt.CurrentContentVersion,
-		).withCreatedBy(opts.OwnerID))
+		).withCreatedBy(opts.OwnerID).withTurnMode(turnModeFromRequest(opts.TurnMode)))
 
 		_, err = tx.InsertChatMessages(ctx, msgParams)
 		if err != nil {
@@ -1087,8 +1089,9 @@ func (p *Server) SendMessage(
 			}
 
 			queued, err := tx.InsertChatQueuedMessage(ctx, database.InsertChatQueuedMessageParams{
-				ChatID:  opts.ChatID,
-				Content: content.RawMessage,
+				ChatID:   opts.ChatID,
+				Content:  content.RawMessage,
+				TurnMode: turnModeFromRequest(opts.TurnMode),
 			})
 			if err != nil {
 				return xerrors.Errorf("insert queued message: %w", err)
@@ -1113,6 +1116,7 @@ func (p *Server) SendMessage(
 			modelConfigID,
 			content,
 			opts.CreatedBy,
+			turnModeFromRequest(opts.TurnMode),
 		)
 		if err != nil {
 			return err
@@ -1266,7 +1270,7 @@ func (p *Server) EditMessage(
 			existing.Visibility,
 			existing.ModelConfigID.UUID,
 			chatprompt.CurrentContentVersion,
-		).withCreatedBy(opts.CreatedBy))
+		).withCreatedBy(opts.CreatedBy).withTurnMode(existing.TurnMode))
 		newMessages, err := insertChatMessageWithStore(ctx, tx, msgParams)
 		if err != nil {
 			return xerrors.Errorf("insert replacement message: %w", err)
@@ -1492,12 +1496,14 @@ func (p *Server) PromoteQueued(
 		}
 
 		var (
-			targetContent json.RawMessage
-			found         bool
+			targetContent  json.RawMessage
+			targetTurnMode database.NullChatTurnMode
+			found          bool
 		)
 		for _, qm := range queuedMessages {
 			if qm.ID == opts.QueuedMessageID {
 				targetContent = qm.Content
+				targetTurnMode = qm.TurnMode
 				found = true
 				break
 			}
@@ -1524,6 +1530,7 @@ func (p *Server) PromoteQueued(
 				Valid:      len(targetContent) > 0,
 			},
 			opts.CreatedBy,
+			targetTurnMode,
 		)
 		if err != nil {
 			return err
@@ -1752,6 +1759,7 @@ func (p *Server) SubmitToolResults(
 			TotalCostMicros:     make([]int64, n),
 			RuntimeMs:           make([]int64, n),
 			ProviderResponseID:  make([]string, n),
+			TurnMode:            make([]string, n),
 		}
 		for i, rc := range resultContents {
 			params.CreatedBy[i] = opts.UserID
@@ -2271,6 +2279,7 @@ func recordManualTitleUsage(
 				TotalCostMicros:     []int64{ptr.NilToDefault(totalCostMicros, 0)},
 				RuntimeMs:           []int64{0},
 				ProviderResponseID:  []string{""},
+				TurnMode:            []string{""},
 			})
 			if err != nil {
 				return xerrors.Errorf("insert manual title usage message: %w", err)
@@ -2392,6 +2401,7 @@ type chatMessage struct {
 	totalCostMicros     int64
 	runtimeMs           int64
 	providerResponseID  string
+	turnMode            database.NullChatTurnMode
 }
 
 func newChatMessage(
@@ -2451,6 +2461,21 @@ func (m chatMessage) withRuntimeMs(ms int64) chatMessage {
 func (m chatMessage) withProviderResponseID(id string) chatMessage {
 	m.providerResponseID = id
 	return m
+}
+
+func (m chatMessage) withTurnMode(mode database.NullChatTurnMode) chatMessage {
+	m.turnMode = mode
+	return m
+}
+
+func turnModeFromRequest(s string) database.NullChatTurnMode {
+	if s == "" {
+		return database.NullChatTurnMode{}
+	}
+	return database.NullChatTurnMode{
+		ChatTurnMode: database.ChatTurnMode(s),
+		Valid:        true,
+	}
 }
 
 // chainModeInfo holds the information needed to determine whether
@@ -2599,6 +2624,7 @@ func appendChatMessage(
 	params.TotalCostMicros = append(params.TotalCostMicros, msg.totalCostMicros)
 	params.RuntimeMs = append(params.RuntimeMs, msg.runtimeMs)
 	params.ProviderResponseID = append(params.ProviderResponseID, msg.providerResponseID)
+	params.TurnMode = append(params.TurnMode, string(msg.turnMode.ChatTurnMode))
 }
 
 // BuildSingleChatMessageInsertParams creates batch insert params for one
@@ -2630,6 +2656,7 @@ func insertUserMessageAndSetPending(
 	modelConfigID uuid.UUID,
 	content pqtype.NullRawMessage,
 	createdBy uuid.UUID,
+	turnMode database.NullChatTurnMode,
 ) (database.ChatMessage, database.Chat, error) {
 	msgParams := database.InsertChatMessagesParams{ //nolint:exhaustruct // Fields populated by appendChatMessage.
 		ChatID: lockedChat.ID,
@@ -2640,7 +2667,7 @@ func insertUserMessageAndSetPending(
 		database.ChatMessageVisibilityBoth,
 		modelConfigID,
 		chatprompt.CurrentContentVersion,
-	).withCreatedBy(createdBy))
+	).withCreatedBy(createdBy).withTurnMode(turnMode))
 	messages, err := insertChatMessageWithStore(ctx, store, msgParams)
 	if err != nil {
 		return database.ChatMessage{}, database.Chat{}, err
@@ -3963,7 +3990,7 @@ func (p *Server) tryAutoPromoteQueuedMessage(
 		database.ChatMessageVisibilityBoth,
 		chat.LastModelConfigID,
 		chatprompt.CurrentContentVersion,
-	).withCreatedBy(chat.OwnerID))
+	).withCreatedBy(chat.OwnerID).withTurnMode(nextQueued.TurnMode))
 	msgs, err := insertChatMessageWithStore(ctx, tx, msgParams)
 	if err != nil {
 		logger.Error(ctx, "failed to promote queued message",
@@ -4424,6 +4451,17 @@ func (p *Server) runChat(
 	if err := g.Wait(); err != nil {
 		return result, err
 	}
+
+	// Capture the current turn's mode for future prompt and tool-policy work.
+	var currentTurnMode database.NullChatTurnMode
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == database.ChatMessageRoleUser {
+			currentTurnMode = messages[i].TurnMode
+			break
+		}
+	}
+	_ = currentTurnMode
+
 	chainInfo := resolveChainMode(messages)
 	result.PushSummaryModel = model
 	result.ProviderKeys = providerKeys
@@ -6100,6 +6138,7 @@ func insertSyntheticToolResultsTx(
 		TotalCostMicros:     make([]int64, n),
 		RuntimeMs:           make([]int64, n),
 		ProviderResponseID:  make([]string, n),
+		TurnMode:            make([]string, n),
 	}
 	for i, rc := range resultContents {
 		params.CreatedBy[i] = uuid.Nil

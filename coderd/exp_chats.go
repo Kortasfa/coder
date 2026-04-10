@@ -462,6 +462,16 @@ func (api *API) postChats(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	switch req.TurnMode {
+	case codersdk.ChatTurnModePlan, "":
+		// Valid.
+	default:
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+			Message: "Invalid turn_mode value.",
+		})
+		return
+	}
+
 	// Validate MCP server IDs exist.
 	if len(req.MCPServerIDs) > 0 {
 		//nolint:gocritic // Need to validate MCP server IDs exist.
@@ -559,6 +569,7 @@ func (api *API) postChats(rw http.ResponseWriter, r *http.Request) {
 		WorkspaceID:        workspaceSelection.WorkspaceID,
 		Title:              title,
 		ModelConfigID:      modelConfigID,
+		TurnMode:           string(req.TurnMode),
 		SystemPrompt:       req.SystemPrompt,
 		InitialUserContent: contentBlocks,
 		MCPServerIDs:       mcpServerIDs,
@@ -1938,6 +1949,16 @@ func (api *API) postChatMessages(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	switch req.TurnMode {
+	case codersdk.ChatTurnModePlan, "":
+		// Valid.
+	default:
+		httpapi.Write(ctx, rw, http.StatusBadRequest, codersdk.Response{
+			Message: "Invalid turn_mode value.",
+		})
+		return
+	}
+
 	busyBehavior := chatd.SendMessageBusyBehaviorQueue
 	switch req.BusyBehavior {
 	case codersdk.ChatBusyBehaviorInterrupt:
@@ -1960,6 +1981,7 @@ func (api *API) postChatMessages(rw http.ResponseWriter, r *http.Request) {
 			Content:       contentBlocks,
 			ModelConfigID: req.ModelConfigID,
 			BusyBehavior:  busyBehavior,
+			TurnMode:      string(req.TurnMode),
 			MCPServerIDs:  req.MCPServerIDs,
 		},
 	)
