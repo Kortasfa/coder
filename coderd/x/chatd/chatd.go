@@ -4371,6 +4371,112 @@ type runChatResult struct {
 	PendingDynamicToolCalls []chatloop.PendingToolCall
 }
 
+// turnPolicy captures the resolved behavior for the current turn.
+type turnPolicy struct {
+	isPlan bool
+}
+
+// resolveTurnPolicy maps a nullable turn mode to a concrete policy.
+func resolveTurnPolicy(mode database.NullChatTurnMode) turnPolicy {
+	return turnPolicy{
+		isPlan: mode.Valid && mode.ChatTurnMode == database.ChatTurnModePlan,
+	}
+}
+
+func (tp turnPolicy) allowedTools(allTools []fantasy.AgentTool) []string {
+	knownBuiltIns := map[string]bool{
+		"read_file":                true,
+		"write_file":               true,
+		"edit_files":               true,
+		"execute":                  true,
+		"process_output":           true,
+		"process_list":             true,
+		"process_signal":           true,
+		"list_templates":           true,
+		"read_template":            true,
+		"create_workspace":         true,
+		"start_workspace":          true,
+		"propose_plan":             true,
+		"spawn_agent":              true,
+		"wait_agent":               true,
+		"message_agent":            true,
+		"close_agent":              true,
+		"spawn_computer_use_agent": true,
+		"read_skill":               true,
+		"read_skill_file":          true,
+	}
+	if !tp.isPlan {
+		toolNames := make([]string, 0, len(allTools))
+		for _, tool := range allTools {
+			name := tool.Info().Name
+			if name == "propose_plan" {
+				continue
+			}
+			toolNames = append(toolNames, name)
+		}
+		return toolNames
+	}
+
+	planAllowlist := map[string]bool{
+		"read_file":        true,
+		"write_file":       true,
+		"edit_files":       true,
+		"list_templates":   true,
+		"read_template":    true,
+		"create_workspace": true,
+		"start_workspace":  true,
+		"propose_plan":     true,
+		"spawn_agent":      true,
+		"wait_agent":       true,
+		"read_skill":       true,
+		"read_skill_file":  true,
+	}
+	toolNames := make([]string, 0, len(allTools))
+	for _, tool := range allTools {
+		name := tool.Info().Name
+		if !knownBuiltIns[name] || planAllowlist[name] {
+			toolNames = append(toolNames, name)
+		}
+	}
+	return toolNames
+}
+
+func (tp turnPolicy) stopAfterTools() map[string]bool {
+	if !tp.isPlan {
+		return nil
+	}
+	return map[string]bool{"propose_plan": true}
+}
+
+// buildSystemPrompt applies system-level prompt injections in the
+// canonical order. It is used by both the initial prompt assembly
+// and the ReloadMessages callback to keep them in sync.
+func buildSystemPrompt(
+	prompt []fantasy.Message,
+	subagentInstruction string,
+	instruction string,
+	skills []chattool.SkillMeta,
+	userPrompt string,
+	tp turnPolicy,
+) []fantasy.Message {
+	if subagentInstruction != "" {
+		prompt = chatprompt.InsertSystem(prompt, subagentInstruction)
+	}
+	if instruction != "" {
+		prompt = chatprompt.InsertSystem(prompt, instruction)
+	}
+	if skillIndex := chattool.FormatSkillIndex(skills); skillIndex != "" {
+		prompt = chatprompt.InsertSystem(prompt, skillIndex)
+	}
+	if userPrompt != "" {
+		prompt = chatprompt.InsertSystem(prompt, userPrompt)
+	}
+	if tp.isPlan {
+		prompt = chatprompt.InsertSystem(prompt, PlanningOverlayPrompt)
+	}
+	return prompt
+}
+
 func (p *Server) runChat(
 	ctx context.Context,
 	chat database.Chat,
@@ -4452,7 +4558,8 @@ func (p *Server) runChat(
 		return result, err
 	}
 
-	// Capture the current turn's mode for future prompt and tool-policy work.
+	// Capture the current turn's mode so prompt and tool behavior can
+	// be resolved consistently for the rest of the turn.
 	var currentTurnMode database.NullChatTurnMode
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == database.ChatMessageRoleUser {
@@ -4460,7 +4567,7 @@ func (p *Server) runChat(
 			break
 		}
 	}
-	_ = currentTurnMode
+	tp := resolveTurnPolicy(currentTurnMode)
 
 	chainInfo := resolveChainMode(messages)
 	result.PushSummaryModel = model
@@ -4686,9 +4793,18 @@ func (p *Server) runChat(
 	if err := g2.Wait(); err != nil {
 		return result, err
 	}
+	subagentInstruction := ""
 	if chat.ParentChatID.Valid {
-		prompt = chatprompt.InsertSystem(prompt, defaultSubagentInstruction)
+		subagentInstruction = defaultSubagentInstruction
 	}
+	prompt = buildSystemPrompt(
+		prompt,
+		subagentInstruction,
+		instruction,
+		skills,
+		resolvedUserPrompt,
+		tp,
+	)
 	if mcpCleanup != nil {
 		defer mcpCleanup()
 	}
@@ -4701,16 +4817,6 @@ func (p *Server) runChat(
 		if mcpTool, ok := t.(mcpclient.MCPToolIdentifier); ok {
 			toolNameToConfigID[t.Info().Name] = mcpTool.MCPServerConfigID()
 		}
-	}
-
-	if instruction != "" {
-		prompt = chatprompt.InsertSystem(prompt, instruction)
-	}
-	if skillIndex := chattool.FormatSkillIndex(skills); skillIndex != "" {
-		prompt = chatprompt.InsertSystem(prompt, skillIndex)
-	}
-	if resolvedUserPrompt != "" {
-		prompt = chatprompt.InsertSystem(prompt, resolvedUserPrompt)
 	}
 
 	// Use the model config's context_limit as a fallback when the LLM
@@ -5018,9 +5124,11 @@ func (p *Server) runChat(
 		}),
 		chattool.WriteFile(chattool.WriteFileOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
+			IsPlanTurn:       tp.isPlan,
 		}),
 		chattool.EditFiles(chattool.EditFilesOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
+			IsPlanTurn:       tp.isPlan,
 		}),
 		chattool.Execute(chattool.ExecuteOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
@@ -5087,6 +5195,7 @@ func (p *Server) runChat(
 		// Plan presentation tool.
 		tools = append(tools, chattool.ProposePlan(chattool.ProposePlanOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
+			IsPlanTurn:       tp.isPlan,
 			StoreFile: func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error) {
 				workspaceCtx.chatStateMu.Lock()
 				chatSnapshot := *workspaceCtx.currentChat
@@ -5138,7 +5247,7 @@ func (p *Server) runChat(
 		}))
 		tools = append(tools, p.subagentTools(ctx, func() database.Chat {
 			return chat
-		})...)
+		}, currentTurnMode)...)
 	}
 
 	// Append skill tools when the workspace has skills.
@@ -5216,6 +5325,16 @@ func (p *Server) runChat(
 			),
 		})
 	}
+	if tp.isPlan {
+		var filteredProviderTools []chatloop.ProviderTool
+		for _, providerTool := range providerTools {
+			if providerTool.Runner != nil {
+				continue
+			}
+			filteredProviderTools = append(filteredProviderTools, providerTool)
+		}
+		providerTools = filteredProviderTools
+	}
 
 	providerOptions := chatprovider.ProviderOptionsFromChatModelConfig(
 		model,
@@ -5238,9 +5357,12 @@ func (p *Server) runChat(
 		prompt = filterPromptForChainMode(prompt, chainInfo)
 	}
 	err = chatloop.Run(ctx, chatloop.RunOptions{
-		Model:    model,
-		Messages: prompt,
-		Tools:    tools, MaxSteps: maxChatSteps,
+		Model:          model,
+		Messages:       prompt,
+		Tools:          tools,
+		ActiveTools:    tp.allowedTools(tools),
+		StopAfterTools: tp.stopAfterTools(),
+		MaxSteps:       maxChatSteps,
 
 		ModelConfig:     callConfig,
 		ProviderOptions: providerOptions,
@@ -5273,19 +5395,15 @@ func (p *Server) runChat(
 			if err != nil {
 				return nil, xerrors.Errorf("convert reloaded messages: %w", err)
 			}
-			if chat.ParentChatID.Valid {
-				reloadedPrompt = chatprompt.InsertSystem(reloadedPrompt, defaultSubagentInstruction)
-			}
-			if instruction != "" {
-				reloadedPrompt = chatprompt.InsertSystem(reloadedPrompt, instruction)
-			}
-			if skillIndex := chattool.FormatSkillIndex(skills); skillIndex != "" {
-				reloadedPrompt = chatprompt.InsertSystem(reloadedPrompt, skillIndex)
-			}
 			reloadUserPrompt := p.resolveUserPrompt(reloadCtx, chat.OwnerID)
-			if reloadUserPrompt != "" {
-				reloadedPrompt = chatprompt.InsertSystem(reloadedPrompt, reloadUserPrompt)
-			}
+			reloadedPrompt = buildSystemPrompt(
+				reloadedPrompt,
+				subagentInstruction,
+				instruction,
+				skills,
+				reloadUserPrompt,
+				tp,
+			)
 			if chainModeActive {
 				reloadedPrompt = filterPromptForChainMode(
 					reloadedPrompt,

@@ -96,7 +96,12 @@ func (p *Server) isDesktopEnabled(ctx context.Context) bool {
 	return enabled
 }
 
-func (p *Server) subagentTools(ctx context.Context, currentChat func() database.Chat) []fantasy.AgentTool {
+func (p *Server) subagentTools(ctx context.Context, currentChat func() database.Chat, parentTurnMode ...database.NullChatTurnMode) []fantasy.AgentTool {
+	var turnMode database.NullChatTurnMode
+	if len(parentTurnMode) > 0 {
+		turnMode = parentTurnMode[0]
+	}
+
 	tools := []fantasy.AgentTool{
 		fantasy.NewAgentTool(
 			"spawn_agent",
@@ -131,11 +136,14 @@ func (p *Server) subagentTools(ctx context.Context, currentChat func() database.
 				if err != nil {
 					return fantasy.NewTextErrorResponse(err.Error()), nil
 				}
-				childChat, err := p.createChildSubagentChat(
+				childChat, err := p.createChildSubagentChatWithOptions(
 					ctx,
 					parent,
 					args.Prompt,
 					args.Title,
+					childSubagentChatOptions{
+						turnMode: turnMode,
+					},
 				)
 				if err != nil {
 					return fantasy.NewTextErrorResponse(err.Error()), nil
@@ -373,6 +381,7 @@ func (p *Server) subagentTools(ctx context.Context, currentChat func() database.
 							Valid:    true,
 						},
 						systemPrompt: computerUseSubagentSystemPrompt + "\n\n" + strings.TrimSpace(args.Prompt),
+						turnMode:     turnMode,
 					},
 				)
 				if err != nil {
@@ -402,6 +411,7 @@ func parseSubagentToolChatID(raw string) (uuid.UUID, error) {
 type childSubagentChatOptions struct {
 	chatMode     database.NullChatMode
 	systemPrompt string
+	turnMode     database.NullChatTurnMode
 }
 
 func (p *Server) createChildSubagentChat(
@@ -564,7 +574,7 @@ func (p *Server) createChildSubagentChatWithOptions(
 			database.ChatMessageVisibilityBoth,
 			parent.LastModelConfigID,
 			chatprompt.CurrentContentVersion,
-		).withCreatedBy(parent.OwnerID))
+		).withCreatedBy(parent.OwnerID).withTurnMode(opts.turnMode))
 		if _, err := tx.InsertChatMessages(ctx, userParams); err != nil {
 			return xerrors.Errorf("insert initial child user message: %w", err)
 		}
