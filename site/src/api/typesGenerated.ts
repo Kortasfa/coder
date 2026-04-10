@@ -2285,6 +2285,11 @@ export interface ChatToolResultPart {
 }
 
 // From codersdk/chats.go
+export type ChatTurnMode = "plan";
+
+export const ChatTurnModes: ChatTurnMode[] = ["plan"];
+
+// From codersdk/chats.go
 /**
  * ChatUsageLimitConfig is the deployment-wide default usage limit config.
  */
@@ -2563,6 +2568,7 @@ export interface CreateChatMessageRequest {
 	readonly model_config_id?: string;
 	readonly mcp_server_ids?: string[];
 	readonly busy_behavior?: ChatBusyBehavior;
+	readonly turn_mode?: ChatTurnMode;
 }
 
 // From codersdk/chats.go
@@ -2624,6 +2630,7 @@ export interface CreateChatRequest {
 	 * subject to change.
 	 */
 	readonly unsafe_dynamic_tools?: readonly DynamicTool[];
+	readonly turn_mode?: ChatTurnMode;
 }
 
 // From codersdk/users.go

@@ -393,6 +393,7 @@ type CreateChatRequest struct {
 	// LLM can invoke. This API is highly experimental and highly
 	// subject to change.
 	UnsafeDynamicTools []DynamicTool `json:"unsafe_dynamic_tools,omitempty"`
+	TurnMode           ChatTurnMode  `json:"turn_mode,omitempty" enums:"plan"`
 }
 
 // UpdateChatRequest is the request to update a chat.
@@ -427,12 +428,21 @@ const (
 	ChatBusyBehaviorInterrupt ChatBusyBehavior = "interrupt"
 )
 
+// ChatTurnMode controls the behavior mode for a single chat turn.
+type ChatTurnMode string
+
+const (
+	// ChatTurnModePlan activates plan mode for the turn.
+	ChatTurnModePlan ChatTurnMode = "plan"
+)
+
 // CreateChatMessageRequest is the request to add a message to a chat.
 type CreateChatMessageRequest struct {
 	Content       []ChatInputPart  `json:"content"`
 	ModelConfigID *uuid.UUID       `json:"model_config_id,omitempty" format:"uuid"`
 	MCPServerIDs  *[]uuid.UUID     `json:"mcp_server_ids,omitempty" format:"uuid"`
 	BusyBehavior  ChatBusyBehavior `json:"busy_behavior,omitempty" enums:"queue,interrupt"`
+	TurnMode      ChatTurnMode     `json:"turn_mode,omitempty" enums:"plan"`
 }
 
 // EditChatMessageRequest is the request to edit a user message in a chat.
