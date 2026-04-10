@@ -4443,11 +4443,11 @@ func (tp turnPolicy) allowedTools(allTools []fantasy.AgentTool) []string {
 	return toolNames
 }
 
-func (tp turnPolicy) stopAfterTools() map[string]bool {
+func (tp turnPolicy) stopAfterTools() map[string]struct{} {
 	if !tp.isPlan {
 		return nil
 	}
-	return map[string]bool{"propose_plan": true}
+	return map[string]struct{}{"propose_plan": {}}
 }
 
 // buildSystemPrompt applies system-level prompt injections in the

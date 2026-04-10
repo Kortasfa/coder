@@ -791,7 +791,7 @@ func TestTurnPolicyHelpers(t *testing.T) {
 			ChatTurnMode: database.ChatTurnModePlan,
 			Valid:        true,
 		})
-		require.Equal(t, map[string]bool{"propose_plan": true}, chatd.TurnPolicyStopAfterToolsForTest(planPolicy))
+		require.Equal(t, map[string]struct{}{"propose_plan": {}}, chatd.TurnPolicyStopAfterToolsForTest(planPolicy))
 	})
 }
 

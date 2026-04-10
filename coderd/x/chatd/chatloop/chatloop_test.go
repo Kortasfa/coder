@@ -962,8 +962,8 @@ func TestStopAfterTool_Success(t *testing.T) {
 		},
 		Tools:    []fantasy.AgentTool{proposePlanTool},
 		MaxSteps: 5,
-		StopAfterTools: map[string]bool{
-			"propose_plan": true,
+		StopAfterTools: map[string]struct{}{
+			"propose_plan": {},
 		},
 		PersistStep: func(_ context.Context, step PersistedStep) error {
 			persistStepCalls++
@@ -1042,8 +1042,8 @@ func TestStopAfterTool_ErrorDoesNotStop(t *testing.T) {
 		},
 		Tools:    []fantasy.AgentTool{proposePlanTool},
 		MaxSteps: 5,
-		StopAfterTools: map[string]bool{
-			"propose_plan": true,
+		StopAfterTools: map[string]struct{}{
+			"propose_plan": {},
 		},
 		PersistStep: func(_ context.Context, step PersistedStep) error {
 			persistStepCalls++
@@ -1121,8 +1121,8 @@ func TestStopAfterTool_NotInList(t *testing.T) {
 		},
 		Tools:    []fantasy.AgentTool{otherTool},
 		MaxSteps: 5,
-		StopAfterTools: map[string]bool{
-			"propose_plan": true,
+		StopAfterTools: map[string]struct{}{
+			"propose_plan": {},
 		},
 		PersistStep: func(_ context.Context, step PersistedStep) error {
 			persistStepCalls++

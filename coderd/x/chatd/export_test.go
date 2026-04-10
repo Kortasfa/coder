@@ -29,6 +29,6 @@ func TurnPolicyAllowedToolsForTest(tp TurnPolicyForTest, allTools []fantasy.Agen
 
 // TurnPolicyStopAfterToolsForTest exports turnPolicy.stopAfterTools for
 // testing.
-func TurnPolicyStopAfterToolsForTest(tp TurnPolicyForTest) map[string]bool {
+func TurnPolicyStopAfterToolsForTest(tp TurnPolicyForTest) map[string]struct{} {
 	return tp.stopAfterTools()
 }

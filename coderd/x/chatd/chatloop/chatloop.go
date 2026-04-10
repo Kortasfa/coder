@@ -122,7 +122,7 @@ type RunOptions struct {
 	// successful result, cause the run to stop after persisting
 	// the current step. This is used for plan turns where
 	// propose_plan should terminate the run on success.
-	StopAfterTools map[string]bool
+	StopAfterTools map[string]struct{}
 
 	// ModelConfig holds per-call LLM parameters (temperature,
 	// max tokens, etc.) read from the chat model configuration.
@@ -1324,12 +1324,12 @@ func buildToolDefinitions(tools []fantasy.AgentTool, activeTools []string, provi
 // shouldStopAfterTools returns true if any tool result in the
 // slice matches a name in stopTools and produced a successful
 // (non-error) result.
-func shouldStopAfterTools(stopTools map[string]bool, results []fantasy.ToolResultContent) bool {
+func shouldStopAfterTools(stopTools map[string]struct{}, results []fantasy.ToolResultContent) bool {
 	if len(stopTools) == 0 {
 		return false
 	}
 	for _, tr := range results {
-		if !stopTools[tr.ToolName] {
+		if _, ok := stopTools[tr.ToolName]; !ok {
 			continue
 		}
 		if _, isErr := tr.Result.(fantasy.ToolResultOutputContentError); !isErr {

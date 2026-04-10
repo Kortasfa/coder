@@ -173,6 +173,16 @@ const createMockSocket = (): MockSocket => {
 				listener(payload);
 			}
 		},
+		emitParseError: () => {
+			const payload: OneWayMessageEvent<TypesGen.ServerSentEvent> = {
+				sourceEvent: {} as MessageEvent<string>,
+				parseError: new Error("invalid json"),
+				parsedMessage: undefined,
+			};
+			for (const listener of messageListeners) {
+				listener(payload);
+			}
+		},
 		emitOpen: () => {
 			for (const listener of openListeners) {
 				listener(new Event("open"));
@@ -3929,6 +3939,210 @@ describe("stream-to-durable transition (Bug 1)", () => {
 			(s) => s.hasStream && s.hasDurableAssistant,
 		);
 		expect(overlapping).toEqual([]);
+	});
+
+	it("surfaces parse errors as a stream error", async () => {
+		immediateAnimationFrame();
+
+		const chatID = "chat-parse-error";
+		const mockSocket = createMockSocket();
+		mockWatchChatReturn(mockSocket);
+
+		const queryClient = createTestQueryClient();
+		const wrapper = ({ children }: PropsWithChildren) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const setChatErrorReason = vi.fn();
+		const clearChatErrorReason = vi.fn();
+
+		const { result } = renderHook(
+			() => {
+				const { store } = useChatStore({
+					chatID,
+					chatMessages: [],
+					chatRecord: makeChat(chatID),
+					chatMessagesData: {
+						messages: [],
+						queued_messages: [],
+						has_more: false,
+					},
+					chatQueuedMessages: [],
+					setChatErrorReason,
+					clearChatErrorReason,
+				});
+				return {
+					streamError: useChatSelector(store, selectStreamError),
+					chatStatus: useChatSelector(store, selectChatStatus),
+				};
+			},
+			{ wrapper },
+		);
+
+		await waitFor(() => {
+			expect(watchChat).toHaveBeenCalledWith(chatID, undefined);
+		});
+
+		act(() => {
+			mockSocket.emitParseError();
+		});
+
+		await waitFor(() => {
+			expect(result.current.streamError).toEqual({
+				kind: "generic",
+				message: "Failed to parse chat stream update.",
+			});
+		});
+		expect(result.current.chatStatus).not.toBe("error");
+	});
+
+	it("does not corrupt in-progress stream state after a parse error", async () => {
+		immediateAnimationFrame();
+
+		const chatID = "chat-parse-no-corrupt";
+		const existingMessage = makeMessage(chatID, 1, "user", "hello");
+		const mockSocket = createMockSocket();
+		mockWatchChatReturn(mockSocket);
+
+		const queryClient = createTestQueryClient();
+		const wrapper = ({ children }: PropsWithChildren) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const setChatErrorReason = vi.fn();
+		const clearChatErrorReason = vi.fn();
+
+		const { result } = renderHook(
+			() => {
+				const { store } = useChatStore({
+					chatID,
+					chatMessages: [existingMessage],
+					chatRecord: makeChat(chatID),
+					chatMessagesData: {
+						messages: [existingMessage],
+						queued_messages: [],
+						has_more: false,
+					},
+					chatQueuedMessages: [],
+					setChatErrorReason,
+					clearChatErrorReason,
+				});
+				return {
+					streamState: useChatSelector(store, selectStreamState),
+					streamError: useChatSelector(store, selectStreamError),
+				};
+			},
+			{ wrapper },
+		);
+
+		await waitFor(() => {
+			expect(watchChat).toHaveBeenCalledWith(chatID, 1);
+		});
+
+		act(() => {
+			mockSocket.emitData({
+				type: "message_part",
+				chat_id: chatID,
+				message_part: {
+					role: "assistant",
+					part: { type: "text", text: "partial response" },
+				},
+			});
+		});
+
+		await waitFor(() => {
+			expect(result.current.streamState?.blocks).toEqual([
+				{ type: "response", text: "partial response" },
+			]);
+		});
+
+		act(() => {
+			mockSocket.emitParseError();
+		});
+
+		await waitFor(() => {
+			expect(result.current.streamError).toEqual({
+				kind: "generic",
+				message: "Failed to parse chat stream update.",
+			});
+		});
+		expect(result.current.streamState?.blocks).toEqual([
+			{ type: "response", text: "partial response" },
+		]);
+	});
+
+	it("continues processing valid events after a parse error", async () => {
+		immediateAnimationFrame();
+
+		const chatID = "chat-parse-recover";
+		const existingMessage = makeMessage(chatID, 1, "user", "hello");
+		const mockSocket = createMockSocket();
+		mockWatchChatReturn(mockSocket);
+
+		const queryClient = createTestQueryClient();
+		const wrapper = ({ children }: PropsWithChildren) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const setChatErrorReason = vi.fn();
+		const clearChatErrorReason = vi.fn();
+
+		const { result } = renderHook(
+			() => {
+				const { store } = useChatStore({
+					chatID,
+					chatMessages: [existingMessage],
+					chatRecord: makeChat(chatID),
+					chatMessagesData: {
+						messages: [existingMessage],
+						queued_messages: [],
+						has_more: false,
+					},
+					chatQueuedMessages: [],
+					setChatErrorReason,
+					clearChatErrorReason,
+				});
+				return {
+					streamState: useChatSelector(store, selectStreamState),
+					streamError: useChatSelector(store, selectStreamError),
+				};
+			},
+			{ wrapper },
+		);
+
+		await waitFor(() => {
+			expect(watchChat).toHaveBeenCalledWith(chatID, 1);
+		});
+
+		act(() => {
+			mockSocket.emitParseError();
+		});
+
+		await waitFor(() => {
+			expect(result.current.streamError).toEqual({
+				kind: "generic",
+				message: "Failed to parse chat stream update.",
+			});
+		});
+
+		act(() => {
+			mockSocket.emitData({
+				type: "message_part",
+				chat_id: chatID,
+				message_part: {
+					role: "assistant",
+					part: { type: "text", text: "recovered" },
+				},
+			});
+		});
+
+		await waitFor(() => {
+			expect(result.current.streamState?.blocks).toEqual([
+				{ type: "response", text: "recovered" },
+			]);
+		});
+
+		expect(result.current.streamError).toEqual({
+			kind: "generic",
+			message: "Failed to parse chat stream update.",
+		});
 	});
 });
 

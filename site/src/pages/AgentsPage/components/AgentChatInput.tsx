@@ -794,20 +794,22 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 										Attach image
 									</button>
 								)}
-								<button
-									type="button"
-									role="menuitemcheckbox"
-									aria-checked={planModeEnabled}
-									onClick={handlePlanModeToggle}
-									disabled={isDisabled || !onPlanModeToggle}
-									className="group flex h-8 w-full cursor-pointer items-center gap-1.5 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors hover:text-content-primary disabled:cursor-not-allowed disabled:opacity-50"
-								>
-									<PencilIcon className="size-3.5 shrink-0" />
-									<span>Plan first</span>
-									{planModeEnabled && (
-										<Check className="ml-auto size-icon-sm shrink-0" />
-									)}
-								</button>
+								{onPlanModeToggle && (
+									<button
+										type="button"
+										role="menuitemcheckbox"
+										aria-checked={planModeEnabled}
+										onClick={handlePlanModeToggle}
+										disabled={isDisabled}
+										className="group flex h-8 w-full cursor-pointer items-center gap-1.5 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors hover:text-content-primary disabled:cursor-not-allowed disabled:opacity-50"
+									>
+										<PencilIcon className="size-3.5 shrink-0" />
+										<span>Plan first</span>
+										{planModeEnabled && (
+											<Check className="ml-auto size-icon-sm shrink-0" />
+										)}
+									</button>
+								)}
 								{workspaceOptions && onWorkspaceChange && (
 									<Popover
 										open={workspacePickerOpen}

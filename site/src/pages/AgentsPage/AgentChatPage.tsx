@@ -534,6 +534,7 @@ const AgentChatPage: FC = () => {
 	const queryClient = useQueryClient();
 	const [selectedModel, setSelectedModel] = useState("");
 	const [planModeEnabled, setPlanModeEnabled] = useState(false);
+	const planModeToggleVersionRef = useRef(0);
 
 	const scrollToBottomRef = useRef<(() => void) | null>(null);
 	const chatInputRef = useRef<ChatMessageInputRef | null>(null);
@@ -861,6 +862,13 @@ const AgentChatPage: FC = () => {
 	const isInputDisabled = !hasModelOptions || isArchived;
 	const selectedWorkspaceId = chatQuery.data?.workspace_id ?? null;
 
+	const isWorkspaceLoading =
+		workspacesQuery.isLoading || updateChatWorkspaceMutation.isPending;
+	const handlePlanModeToggle = (enabled: boolean) => {
+		planModeToggleVersionRef.current += 1;
+		setPlanModeEnabled(enabled);
+	};
+
 	const handleUsageLimitError = (error: unknown): void => {
 		if (!agentId) {
 			return;
@@ -1145,6 +1153,7 @@ const AgentChatPage: FC = () => {
 		turnMode,
 		useComposerContent = true,
 		resetPlanModeOnSuccess = false,
+		planModeToggleVersion,
 	}: {
 		message: string;
 		attachments?: readonly PendingAttachment[];
@@ -1152,6 +1161,7 @@ const AgentChatPage: FC = () => {
 		turnMode?: TypesGen.ChatTurnMode | null;
 		useComposerContent?: boolean;
 		resetPlanModeOnSuccess?: boolean;
+		planModeToggleVersion?: number;
 	}) {
 		const { content, hasContent } = buildChatInputContent({
 			message,
@@ -1250,7 +1260,10 @@ const AgentChatPage: FC = () => {
 		} else {
 			localStorage.removeItem(lastModelConfigIDStorageKey);
 		}
-		if (resetPlanModeOnSuccess) {
+		if (
+			resetPlanModeOnSuccess &&
+			planModeToggleVersion === planModeToggleVersionRef.current
+		) {
 			setPlanModeEnabled(false);
 		}
 	}
@@ -1260,12 +1273,15 @@ const AgentChatPage: FC = () => {
 		attachments?: readonly PendingAttachment[],
 		editedMessageID?: number,
 	) {
+		const submittedInPlanMode = planModeEnabled;
+		const planModeToggleVersion = planModeToggleVersionRef.current;
 		await submitChatTurn({
 			message,
 			attachments,
 			editedMessageID,
-			turnMode: planModeEnabled ? "plan" : undefined,
-			resetPlanModeOnSuccess: true,
+			turnMode: submittedInPlanMode ? "plan" : undefined,
+			resetPlanModeOnSuccess: submittedInPlanMode,
+			planModeToggleVersion,
 		});
 	}
 
@@ -1281,7 +1297,8 @@ const AgentChatPage: FC = () => {
 			message: "Implement the plan.",
 			turnMode: null,
 			useComposerContent: false,
-			resetPlanModeOnSuccess: true,
+			resetPlanModeOnSuccess: planModeEnabled,
+			planModeToggleVersion: planModeToggleVersionRef.current,
 		});
 	};
 
@@ -1297,7 +1314,7 @@ const AgentChatPage: FC = () => {
 				hasModelOptions={hasModelOptions}
 				isModelCatalogLoading={isModelCatalogLoading}
 				planModeEnabled={planModeEnabled}
-				onPlanModeToggle={setPlanModeEnabled}
+				onPlanModeToggle={handlePlanModeToggle}
 				isSidebarCollapsed={isSidebarCollapsed}
 				onToggleSidebarCollapsed={onToggleSidebarCollapsed}
 				showRightPanel={showSidebarPanel}
@@ -1336,7 +1353,7 @@ const AgentChatPage: FC = () => {
 			hasModelOptions={hasModelOptions}
 			isModelCatalogLoading={isModelCatalogLoading}
 			planModeEnabled={planModeEnabled}
-			onPlanModeToggle={setPlanModeEnabled}
+			onPlanModeToggle={handlePlanModeToggle}
 			compressionThreshold={compressionThreshold}
 			isInputDisabled={isInputDisabled}
 			isSubmissionPending={isSubmissionPending}
@@ -1344,9 +1361,7 @@ const AgentChatPage: FC = () => {
 			workspaceOptions={workspacesQuery.data?.workspaces ?? []}
 			selectedWorkspaceId={selectedWorkspaceId}
 			onWorkspaceChange={handleWorkspaceChange}
-			isWorkspaceLoading={
-				workspacesQuery.isLoading || updateChatWorkspaceMutation.isPending
-			}
+			isWorkspaceLoading={isWorkspaceLoading}
 			isSidebarCollapsed={isSidebarCollapsed}
 			onToggleSidebarCollapsed={onToggleSidebarCollapsed}
 			showSidebarPanel={showSidebarPanel}
