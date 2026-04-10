@@ -748,6 +748,23 @@ export const updateChatSystemPrompt = (queryClient: QueryClient) => ({
 	},
 });
 
+const chatPlanModeInstructionsKey = ["chat-plan-mode-instructions"] as const;
+
+export const chatPlanModeInstructions = () => ({
+	queryKey: chatPlanModeInstructionsKey,
+	queryFn: () => API.experimental.getChatPlanModeInstructions(),
+});
+
+export const updateChatPlanModeInstructions = (queryClient: QueryClient) => ({
+	mutationFn: (req: TypesGen.UpdateChatPlanModeInstructionsRequest) =>
+		API.experimental.updateChatPlanModeInstructions(req),
+	onSuccess: async () => {
+		await queryClient.invalidateQueries({
+			queryKey: chatPlanModeInstructionsKey,
+		});
+	},
+});
+
 const chatDesktopEnabledKey = ["chat-desktop-enabled"] as const;
 
 export const chatDesktopEnabled = () => ({
