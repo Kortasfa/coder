@@ -2489,6 +2489,9 @@ type chainModeInfo struct {
 	// modelConfigID is the model configuration used to produce the
 	// assistant message referenced by previousResponseID.
 	modelConfigID uuid.UUID
+	// previousTurnMode is the turn mode of the turn that produced
+	// previousResponseID, when it can be determined from history.
+	previousTurnMode database.NullChatTurnMode
 	// trailingUserCount is the number of contiguous user messages
 	// at the end of the conversation that form the current turn.
 	trailingUserCount int
@@ -2521,6 +2524,45 @@ func userMessageContributesToChainMode(msg database.ChatMessage) bool {
 	return false
 }
 
+func resolvePreviousTurnMode(
+	messages []database.ChatMessage,
+	assistantIdx int,
+) database.NullChatTurnMode {
+	if assistantIdx < 0 || assistantIdx >= len(messages) {
+		return database.NullChatTurnMode{}
+	}
+	turnMode := messages[assistantIdx].TurnMode
+	if turnMode.Valid && turnMode.ChatTurnMode.Valid() {
+		return turnMode
+	}
+	for i := assistantIdx - 1; i >= 0; i-- {
+		switch messages[i].Role {
+		case database.ChatMessageRoleAssistant, database.ChatMessageRoleTool:
+			continue
+		case database.ChatMessageRoleUser:
+			return messages[i].TurnMode
+		default:
+			return database.NullChatTurnMode{}
+		}
+	}
+	return database.NullChatTurnMode{}
+}
+
+func chainModeTurnModesMatch(
+	current database.NullChatTurnMode,
+	previous database.NullChatTurnMode,
+) bool {
+	currentValid := current.Valid && current.ChatTurnMode.Valid()
+	previousValid := previous.Valid && previous.ChatTurnMode.Valid()
+	if !currentValid && !previousValid {
+		return true
+	}
+	if currentValid != previousValid {
+		return false
+	}
+	return current.ChatTurnMode == previous.ChatTurnMode
+}
+
 // resolveChainMode scans DB messages from the end to count trailing user
 // messages for the current turn and detect whether the immediately
 // preceding assistant/tool block can chain from a provider response ID.
@@ -2542,6 +2584,7 @@ func resolveChainMode(messages []database.ChatMessage) chainModeInfo {
 			if messages[i].ProviderResponseID.Valid &&
 				messages[i].ProviderResponseID.String != "" {
 				info.previousResponseID = messages[i].ProviderResponseID.String
+				info.previousTurnMode = resolvePreviousTurnMode(messages, i)
 				if messages[i].ModelConfigID.Valid {
 					info.modelConfigID = messages[i].ModelConfigID.UUID
 				}
@@ -4394,6 +4437,7 @@ func allowedTurnToolNames(allTools []fantasy.AgentTool, mode database.NullChatTu
 		"spawn_computer_use_agent": true,
 		"read_skill":               true,
 		"read_skill_file":          true,
+		"ask_user_question":        true,
 	}
 	if !isPlanTurn {
 		toolNames := make([]string, 0, len(allTools))
@@ -4408,23 +4452,24 @@ func allowedTurnToolNames(allTools []fantasy.AgentTool, mode database.NullChatTu
 	}
 
 	planAllowlist := map[string]bool{
-		"read_file":        true,
-		"write_file":       true,
-		"edit_files":       true,
-		"list_templates":   true,
-		"read_template":    true,
-		"create_workspace": true,
-		"start_workspace":  true,
-		"propose_plan":     true,
-		"spawn_agent":      true,
-		"wait_agent":       true,
-		"read_skill":       true,
-		"read_skill_file":  true,
+		"read_file":         true,
+		"write_file":        true,
+		"edit_files":        true,
+		"list_templates":    true,
+		"read_template":     true,
+		"create_workspace":  true,
+		"start_workspace":   true,
+		"propose_plan":      true,
+		"spawn_agent":       true,
+		"wait_agent":        true,
+		"read_skill":        true,
+		"read_skill_file":   true,
+		"ask_user_question": true,
 	}
 	toolNames := make([]string, 0, len(allTools))
 	for _, tool := range allTools {
 		name := tool.Info().Name
-		if !knownBuiltIns[name] || planAllowlist[name] {
+		if knownBuiltIns[name] && planAllowlist[name] {
 			toolNames = append(toolNames, name)
 		}
 	}
@@ -4485,6 +4530,7 @@ func (p *Server) runChat(
 		providerKeys chatprovider.ProviderAPIKeys
 		callConfig   codersdk.ChatModelCallConfig
 		messages     []database.ChatMessage
+		err          error
 	)
 
 	// Load MCP server configs and user tokens in parallel with
@@ -5149,6 +5195,9 @@ func (p *Server) runChat(
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
 		}),
 	}
+	if isPlanTurn {
+		tools = append(tools, chattool.NewAskUserQuestionTool())
+	}
 	// Only root chats (not delegated subagents) get workspace
 	// provisioning and subagent tools. Child agents must not
 	// create workspaces or spawn further subagents — they should
@@ -5273,50 +5322,55 @@ func (p *Server) runChat(
 	// Append tools from external MCP servers. These appear
 	// after the built-in tools so the LLM sees them as
 	// additional capabilities.
-	tools = append(tools, mcpTools...)
-	tools = append(tools, workspaceMCPTools...)
+	if !isPlanTurn {
+		tools = append(tools, mcpTools...)
+		tools = append(tools, workspaceMCPTools...)
+	}
 
 	// Append dynamic tools declared by the client at chat
 	// creation time. These appear in the LLM's tool list but
 	// are never executed by the chatloop — the client handles
 	// execution via POST /tool-results.
-	dynamicToolNames, err := parseDynamicToolNames(chat.DynamicTools)
-	if err != nil {
-		return result, xerrors.Errorf("parse dynamic tool names: %w", err)
-	}
-	// Unmarshal the full definitions separately so we can
-	// build the filtered list below. parseDynamicToolNames
-	// already validated the JSON, so this cannot fail.
-	var dynamicToolDefs []codersdk.DynamicTool
-	if chat.DynamicTools.Valid {
-		if err := json.Unmarshal(chat.DynamicTools.RawMessage, &dynamicToolDefs); err != nil {
-			return result, xerrors.Errorf("unmarshal dynamic tools: %w", err)
+	var dynamicToolNames map[string]bool
+	if !isPlanTurn {
+		dynamicToolNames, err = parseDynamicToolNames(chat.DynamicTools)
+		if err != nil {
+			return result, xerrors.Errorf("parse dynamic tool names: %w", err)
 		}
-	}
-	for _, t := range tools {
-		info := t.Info()
-		if dynamicToolNames[info.Name] {
-			logger.Warn(ctx, "dynamic tool name collides with built-in tool, built-in takes precedence",
-				slog.F("tool_name", info.Name))
-			delete(dynamicToolNames, info.Name)
+		// Unmarshal the full definitions separately so we can
+		// build the filtered list below. parseDynamicToolNames
+		// already validated the JSON, so this cannot fail.
+		var dynamicToolDefs []codersdk.DynamicTool
+		if chat.DynamicTools.Valid {
+			if err := json.Unmarshal(chat.DynamicTools.RawMessage, &dynamicToolDefs); err != nil {
+				return result, xerrors.Errorf("unmarshal dynamic tools: %w", err)
+			}
 		}
-	}
+		for _, t := range tools {
+			info := t.Info()
+			if dynamicToolNames[info.Name] {
+				logger.Warn(ctx, "dynamic tool name collides with built-in tool, built-in takes precedence",
+					slog.F("tool_name", info.Name))
+				delete(dynamicToolNames, info.Name)
+			}
+		}
 
-	var filteredDefs []codersdk.DynamicTool
-	for _, dt := range dynamicToolDefs {
-		if dynamicToolNames[dt.Name] {
-			filteredDefs = append(filteredDefs, dt)
+		var filteredDefs []codersdk.DynamicTool
+		for _, dt := range dynamicToolDefs {
+			if dynamicToolNames[dt.Name] {
+				filteredDefs = append(filteredDefs, dt)
+			}
 		}
+		tools = append(tools, dynamicToolsFromSDK(p.logger, filteredDefs)...)
 	}
-	tools = append(tools, dynamicToolsFromSDK(p.logger, filteredDefs)...)
 	// Build provider-native tools (e.g., web search) based on
 	// the model configuration.
 	var providerTools []chatloop.ProviderTool
-	if callConfig.ProviderOptions != nil {
+	if !isPlanTurn && callConfig.ProviderOptions != nil {
 		providerTools = buildProviderTools(model.Provider(), callConfig.ProviderOptions)
 	}
 
-	if isComputerUse {
+	if !isPlanTurn && isComputerUse {
 		desktopGeometry := workspacesdk.DefaultDesktopGeometry()
 		providerTools = append(providerTools, chatloop.ProviderTool{
 			Definition: chattool.ComputerUseProviderTool(
@@ -5331,16 +5385,6 @@ func (p *Server) runChat(
 			),
 		})
 	}
-	if isPlanTurn {
-		var filteredProviderTools []chatloop.ProviderTool
-		for _, providerTool := range providerTools {
-			if providerTool.Runner != nil {
-				continue
-			}
-			filteredProviderTools = append(filteredProviderTools, providerTool)
-		}
-		providerTools = filteredProviderTools
-	}
 
 	providerOptions := chatprovider.ProviderOptionsFromChatModelConfig(
 		model,
@@ -5354,7 +5398,8 @@ func (p *Server) runChat(
 	chainModeActive := chatprovider.IsResponsesStoreEnabled(providerOptions) &&
 		chainInfo.previousResponseID != "" &&
 		chainInfo.contributingTrailingUserCount > 0 &&
-		chainInfo.modelConfigID == modelConfig.ID
+		chainInfo.modelConfigID == modelConfig.ID &&
+		chainModeTurnModesMatch(currentTurnMode, chainInfo.previousTurnMode)
 	if chainModeActive {
 		providerOptions = chatprovider.CloneWithPreviousResponseID(
 			providerOptions,
