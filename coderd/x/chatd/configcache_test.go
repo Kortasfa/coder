@@ -11,9 +11,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"golang.org/x/xerrors"
 
 	"github.com/coder/coder/v2/coderd/database"
+	"github.com/coder/coder/v2/coderd/database/dbmock"
 	"github.com/coder/coder/v2/testutil"
 	"github.com/coder/quartz"
 )
@@ -380,6 +382,152 @@ func TestConfigCache_InvalidateUserPrompt_BlocksStaleInFlightPrompt(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, freshPrompt, third)
 	require.Equal(t, int32(2), store.userPromptCalls.Load())
+}
+
+func TestConfigCache_PlanModeInstructions_CacheHit(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitShort)
+	clock := quartz.NewMock(t)
+	ctrl := gomock.NewController(t)
+	mockStore := dbmock.NewMockStore(ctrl)
+	var calls atomic.Int32
+	const instructions = "plan mode instructions"
+	mockStore.EXPECT().GetChatPlanModeInstructions(gomock.Any()).DoAndReturn(func(context.Context) (string, error) {
+		calls.Add(1)
+		return instructions, nil
+	}).Times(1)
+	cache := newChatConfigCache(ctx, mockStore, clock)
+
+	first, err := cache.PlanModeInstructions(ctx)
+	require.NoError(t, err)
+	second, err := cache.PlanModeInstructions(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, instructions, first)
+	require.Equal(t, instructions, second)
+	require.Equal(t, int32(1), calls.Load())
+}
+
+func TestConfigCache_PlanModeInstructions_TTLExpiry(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitShort)
+	clock := quartz.NewMock(t)
+	ctrl := gomock.NewController(t)
+	mockStore := dbmock.NewMockStore(ctrl)
+	var calls atomic.Int32
+	mockStore.EXPECT().GetChatPlanModeInstructions(gomock.Any()).DoAndReturn(func(context.Context) (string, error) {
+		call := calls.Add(1)
+		return fmt.Sprintf("instructions-%d", call), nil
+	}).Times(2)
+	cache := newChatConfigCache(ctx, mockStore, clock)
+
+	first, err := cache.PlanModeInstructions(ctx)
+	require.NoError(t, err)
+	clock.Advance(chatConfigUserPromptTTL).MustWait(ctx)
+	second, err := cache.PlanModeInstructions(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, "instructions-1", first)
+	require.Equal(t, "instructions-2", second)
+	require.Equal(t, int32(2), calls.Load())
+}
+
+func TestConfigCache_InvalidatePlanModeInstructions(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitShort)
+	clock := quartz.NewMock(t)
+	ctrl := gomock.NewController(t)
+	mockStore := dbmock.NewMockStore(ctrl)
+	var calls atomic.Int32
+	mockStore.EXPECT().GetChatPlanModeInstructions(gomock.Any()).DoAndReturn(func(context.Context) (string, error) {
+		call := calls.Add(1)
+		return fmt.Sprintf("instructions-%d", call), nil
+	}).Times(2)
+	cache := newChatConfigCache(ctx, mockStore, clock)
+
+	first, err := cache.PlanModeInstructions(ctx)
+	require.NoError(t, err)
+	cache.InvalidatePlanModeInstructions()
+	second, err := cache.PlanModeInstructions(ctx)
+	require.NoError(t, err)
+
+	require.Equal(t, "instructions-1", first)
+	require.Equal(t, "instructions-2", second)
+	require.Equal(t, int32(2), calls.Load())
+}
+
+func TestConfigCache_InvalidatePlanModeInstructions_BlocksStaleInFlightPrompt(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitMedium)
+	clock := quartz.NewMock(t)
+	ctrl := gomock.NewController(t)
+	mockStore := dbmock.NewMockStore(ctrl)
+	const staleInstructions = "stale instructions"
+	const freshInstructions = "fresh instructions"
+	firstStarted := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var calls atomic.Int32
+	mockStore.EXPECT().GetChatPlanModeInstructions(gomock.Any()).DoAndReturn(func(context.Context) (string, error) {
+		switch call := calls.Add(1); call {
+		case 1:
+			close(firstStarted)
+			<-releaseFirst
+			return staleInstructions, nil
+		case 2:
+			close(secondStarted)
+			<-releaseSecond
+			return freshInstructions, nil
+		default:
+			return "", xerrors.Errorf("unexpected plan mode instructions call %d", call)
+		}
+	}).Times(2)
+	cache := newChatConfigCache(ctx, mockStore, clock)
+
+	type result struct {
+		instructions string
+		err          error
+	}
+
+	firstResult := make(chan result, 1)
+	go func() {
+		instructions, err := cache.PlanModeInstructions(ctx)
+		firstResult <- result{instructions: instructions, err: err}
+	}()
+
+	waitForSignal(t, firstStarted)
+	cache.InvalidatePlanModeInstructions()
+
+	secondResult := make(chan result, 1)
+	go func() {
+		instructions, err := cache.PlanModeInstructions(ctx)
+		secondResult <- result{instructions: instructions, err: err}
+	}()
+
+	waitForSignal(t, secondStarted)
+	close(releaseFirst)
+	first := <-firstResult
+	require.NoError(t, first.err)
+	require.Equal(t, staleInstructions, first.instructions)
+	cached, ok := cache.cachedPlanModeInstructions()
+	require.False(t, ok)
+	require.Empty(t, cached)
+
+	close(releaseSecond)
+	second := <-secondResult
+	require.NoError(t, second.err)
+	require.Equal(t, freshInstructions, second.instructions)
+	require.Equal(t, int32(2), calls.Load())
+
+	third, err := cache.PlanModeInstructions(ctx)
+	require.NoError(t, err)
+	require.Equal(t, freshInstructions, third)
+	require.Equal(t, int32(2), calls.Load())
 }
 
 func TestConfigCache_Singleflight(t *testing.T) {

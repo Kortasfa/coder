@@ -8197,6 +8197,107 @@ func TestChatSystemPrompt(t *testing.T) {
 	})
 }
 
+//nolint:tparallel,paralleltest // Subtests share a single coderdtest instance.
+func TestChatPlanModeInstructions(t *testing.T) {
+	t.Parallel()
+
+	adminClient, _ := newChatClientWithDatabase(t)
+	firstUser := coderdtest.CreateFirstUser(t, adminClient.Client)
+	_ = createChatModelConfig(t, adminClient)
+	memberClientRaw, _ := coderdtest.CreateAnotherUser(t, adminClient.Client, firstUser.OrganizationID)
+	memberClient := codersdk.NewExperimentalClient(memberClientRaw)
+
+	updateChatPlanModeInstructions := func(t *testing.T, ctx context.Context, req codersdk.UpdateChatPlanModeInstructionsRequest) {
+		t.Helper()
+
+		err := adminClient.UpdateChatPlanModeInstructions(ctx, req)
+		require.NoError(t, err)
+	}
+
+	getChatPlanModeInstructions := func(t *testing.T, ctx context.Context) codersdk.ChatPlanModeInstructionsResponse {
+		t.Helper()
+
+		resp, err := adminClient.GetChatPlanModeInstructions(ctx)
+		require.NoError(t, err)
+		return resp
+	}
+
+	t.Run("DefaultGETReturnsEmpty", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitLong)
+
+		resp := getChatPlanModeInstructions(t, ctx)
+		require.Equal(t, "", resp.PlanModeInstructions)
+	})
+
+	t.Run("PUTThenGETRoundTrips", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitLong)
+		const instructions = "Use plan mode for multi-step changes."
+
+		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
+			PlanModeInstructions: instructions,
+		})
+
+		resp := getChatPlanModeInstructions(t, ctx)
+		require.Equal(t, instructions, resp.PlanModeInstructions)
+	})
+
+	t.Run("InvisibleUnicodeIsStripped", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitLong)
+		const rawInstructions = "plan\u200b mode\u200d instructions\uFEFF"
+
+		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
+			PlanModeInstructions: rawInstructions,
+		})
+
+		resp := getChatPlanModeInstructions(t, ctx)
+		require.Equal(t, "plan mode instructions", resp.PlanModeInstructions)
+	})
+
+	t.Run("OversizedPayloadReturns400", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitLong)
+		tooLong := strings.Repeat("a", 131073)
+
+		err := adminClient.UpdateChatPlanModeInstructions(ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
+			PlanModeInstructions: tooLong,
+		})
+		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
+		require.Equal(t, "Plan mode instructions exceed maximum length.", sdkErr.Message)
+	})
+
+	t.Run("NonAdminGETReturns404", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitLong)
+
+		_, err := memberClient.GetChatPlanModeInstructions(ctx)
+		requireSDKError(t, err, http.StatusNotFound)
+	})
+
+	t.Run("NonAdminPUTReturns403", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitLong)
+
+		err := memberClient.UpdateChatPlanModeInstructions(ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
+			PlanModeInstructions: "This should fail.",
+		})
+		requireSDKError(t, err, http.StatusForbidden)
+	})
+
+	t.Run("ClearWithEmptyString", func(t *testing.T) {
+		ctx := testutil.Context(t, testutil.WaitLong)
+		const instructions = "Temporary instructions before clear."
+
+		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
+			PlanModeInstructions: instructions,
+		})
+		resp := getChatPlanModeInstructions(t, ctx)
+		require.Equal(t, instructions, resp.PlanModeInstructions)
+
+		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
+			PlanModeInstructions: "",
+		})
+		resp = getChatPlanModeInstructions(t, ctx)
+		require.Equal(t, "", resp.PlanModeInstructions)
+	})
+}
+
 func TestChatDesktopEnabled(t *testing.T) {
 	t.Parallel()
 
