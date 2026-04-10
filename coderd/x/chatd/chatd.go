@@ -4459,6 +4459,7 @@ func buildSystemPrompt(
 	instruction string,
 	skills []chattool.SkillMeta,
 	userPrompt string,
+	planModeInstructions string,
 	tp turnPolicy,
 ) []fantasy.Message {
 	if subagentInstruction != "" {
@@ -4475,6 +4476,9 @@ func buildSystemPrompt(
 	}
 	if tp.isPlan {
 		prompt = chatprompt.InsertSystem(prompt, PlanningOverlayPrompt)
+		if planModeInstructions != "" {
+			prompt = chatprompt.InsertSystem(prompt, planModeInstructions)
+		}
 	}
 	return prompt
 }
@@ -4570,6 +4574,10 @@ func (p *Server) runChat(
 		}
 	}
 	tp := resolveTurnPolicy(currentTurnMode)
+	var planModeInstructions string
+	if currentTurnMode.Valid && currentTurnMode.ChatTurnMode == database.ChatTurnModePlan {
+		planModeInstructions, _ = p.configCache.PlanModeInstructions(ctx)
+	}
 
 	chainInfo := resolveChainMode(messages)
 	result.PushSummaryModel = model
@@ -4805,6 +4813,7 @@ func (p *Server) runChat(
 		instruction,
 		skills,
 		resolvedUserPrompt,
+		planModeInstructions,
 		tp,
 	)
 	if mcpCleanup != nil {
@@ -5404,6 +5413,7 @@ func (p *Server) runChat(
 				instruction,
 				skills,
 				reloadUserPrompt,
+				planModeInstructions,
 				tp,
 			)
 			if chainModeActive {
