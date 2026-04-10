@@ -173,16 +173,6 @@ const createMockSocket = (): MockSocket => {
 				listener(payload);
 			}
 		},
-		emitParseError: () => {
-			const payload: OneWayMessageEvent<TypesGen.ServerSentEvent> = {
-				sourceEvent: {} as MessageEvent<string>,
-				parseError: new Error("invalid json"),
-				parsedMessage: undefined,
-			};
-			for (const listener of messageListeners) {
-				listener(payload);
-			}
-		},
 		emitOpen: () => {
 			for (const listener of openListeners) {
 				listener(new Event("open"));

@@ -894,7 +894,6 @@ const AgentChatPage: FC = () => {
 		}
 	};
 
-
 	const handleInterrupt = () => {
 		if (!agentId || isInterruptPending) {
 			return;

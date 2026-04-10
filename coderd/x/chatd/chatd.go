@@ -1768,6 +1768,7 @@ func (p *Server) SubmitToolResults(
 			params.Content[i] = string(rc.RawMessage)
 			params.ContentVersion[i] = chatprompt.CurrentContentVersion
 			params.Visibility[i] = database.ChatMessageVisibilityBoth
+			params.TurnMode[i] = ""
 		}
 		if _, insertErr := tx.InsertChatMessages(ctx, params); insertErr != nil {
 			return xerrors.Errorf("insert tool results: %w", insertErr)
@@ -6280,6 +6281,7 @@ func insertSyntheticToolResultsTx(
 		params.Content[i] = string(rc.RawMessage)
 		params.ContentVersion[i] = chatprompt.CurrentContentVersion
 		params.Visibility[i] = database.ChatMessageVisibilityBoth
+		params.TurnMode[i] = ""
 	}
 	if _, err := store.InsertChatMessages(ctx, params); err != nil {
 		return xerrors.Errorf("insert synthetic tool results: %w", err)
