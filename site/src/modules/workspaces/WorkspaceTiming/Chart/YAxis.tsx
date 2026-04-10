@@ -1,4 +1,3 @@
-import type { Interpolation, Theme } from "@emotion/react";
 import type { FC, HTMLProps } from "react";
 import { cn } from "#/utils/cn";
 
@@ -48,7 +47,16 @@ export const YAxisHeader: FC<HTMLProps<HTMLSpanElement>> = (props) => {
 };
 
 export const YAxisLabels: FC<HTMLProps<HTMLUListElement>> = (props) => {
-	return <ul css={styles.labels} {...props} />;
+	return (
+		<ul
+			{...props}
+			className={cn(
+				"m-0 list-none flex flex-col text-right",
+				"gap-[var(--x-axis-rows-gap)] p-[var(--section-padding)]",
+				props.className,
+			)}
+		/>
+	);
 };
 
 type YAxisLabelProps = Omit<HTMLProps<HTMLLIElement>, "id"> & {
@@ -57,32 +65,16 @@ type YAxisLabelProps = Omit<HTMLProps<HTMLLIElement>, "id"> & {
 
 export const YAxisLabel: FC<YAxisLabelProps> = ({ id, ...props }) => {
 	return (
-		<li {...props} css={styles.label} id={encodeURIComponent(id)}>
+		<li
+			{...props}
+			className={cn(
+				"flex items-center",
+				"[&>*]:block [&>*]:w-full [&>*]:truncate",
+				props.className,
+			)}
+			id={encodeURIComponent(id)}
+		>
 			<span>{props.children}</span>
 		</li>
 	);
 };
-
-const styles = {
-	labels: {
-		margin: 0,
-		listStyle: "none",
-		display: "flex",
-		flexDirection: "column",
-		gap: "var(--x-axis-rows-gap)",
-		textAlign: "right",
-		padding: "var(--section-padding)",
-	},
-	label: {
-		display: "flex",
-		alignItems: "center",
-
-		"& > *": {
-			display: "block",
-			width: "100%",
-			overflow: "hidden",
-			textOverflow: "ellipsis",
-			whiteSpace: "nowrap",
-		},
-	},
-} satisfies Record<string, Interpolation<Theme>>;

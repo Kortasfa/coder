@@ -1,4 +1,3 @@
-import type { CSSObject, Interpolation, Theme } from "@emotion/react";
 import type { FC } from "react";
 import { useNavigate } from "react-router";
 import type { TemplateVersion } from "#/api/typesGenerated";
@@ -40,11 +39,11 @@ export const VersionRow: FC<VersionRowProps> = ({
 			{...clickableProps}
 			className={clickableProps.className}
 		>
-			<TableCell css={styles.versionCell}>
+			<TableCell className="!p-0 relative border-b-0">
 				<Stack
 					direction="row"
 					alignItems="center"
-					css={styles.versionWrapper}
+					className="px-8 py-4"
 					justifyContent="space-between"
 				>
 					<Stack direction="row" alignItems="center">
@@ -53,7 +52,7 @@ export const VersionRow: FC<VersionRowProps> = ({
 							src={version.created_by.avatar_url}
 						/>
 						<Stack
-							css={styles.versionSummary}
+							className="text-base [font-family:inherit]"
 							direction="row"
 							alignItems="center"
 							spacing={1}
@@ -67,7 +66,7 @@ export const VersionRow: FC<VersionRowProps> = ({
 								<InfoTooltip title="Message" message={version.message} />
 							)}
 
-							<span css={styles.versionTime}>
+							<span className="text-content-secondary text-[12px]">
 								{new Date(version.created_at).toLocaleTimeString()}
 							</span>
 						</Stack>
@@ -138,25 +137,3 @@ export const VersionRow: FC<VersionRowProps> = ({
 		</TimelineEntry>
 	);
 };
-
-const styles = {
-	versionWrapper: {
-		padding: "16px 32px",
-	},
-
-	versionCell: {
-		padding: "0 !important",
-		position: "relative",
-		borderBottom: 0,
-	},
-
-	versionSummary: (theme) => ({
-		...(theme.typography.body1 as CSSObject),
-		fontFamily: "inherit",
-	}),
-
-	versionTime: (theme) => ({
-		color: theme.palette.text.secondary,
-		fontSize: 12,
-	}),
-} satisfies Record<string, Interpolation<Theme>>;

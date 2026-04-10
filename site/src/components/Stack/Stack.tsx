@@ -1,12 +1,12 @@
-import type { CSSObject } from "@emotion/react";
+import { cn } from "#/utils/cn";
 
 type StackProps = React.ComponentPropsWithRef<"div"> & {
 	className?: string;
 	direction?: "column" | "row";
 	spacing?: number;
-	alignItems?: CSSObject["alignItems"];
-	justifyContent?: CSSObject["justifyContent"];
-	wrap?: CSSObject["flexWrap"];
+	alignItems?: React.CSSProperties["alignItems"];
+	justifyContent?: React.CSSProperties["justifyContent"];
+	wrap?: React.CSSProperties["flexWrap"];
 };
 
 /**
@@ -26,14 +26,14 @@ export const Stack: React.FC<StackProps> = (props) => {
 	return (
 		<div
 			{...divProps}
-			css={{
-				display: "flex",
+			className={cn("flex max-w-full", divProps.className)}
+			style={{
+				...divProps.style,
 				flexDirection: direction,
 				gap: spacing * 8,
-				alignItems: alignItems,
-				justifyContent: justifyContent,
+				alignItems,
+				justifyContent,
 				flexWrap: wrap,
-				maxWidth: "100%",
 			}}
 		>
 			{children}

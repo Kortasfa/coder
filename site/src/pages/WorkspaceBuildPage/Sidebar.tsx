@@ -29,25 +29,12 @@ export const SidebarItem: FC<SidebarItemProps> = ({
 }) => {
 	return (
 		<button
-			css={(theme) => ({
-				background: active ? theme.experimental.l2.background : "none",
-				border: "none",
-				fontSize: 14,
-				width: "100%",
-				textAlign: "left",
-				padding: "0 24px",
-				cursor: "pointer",
-				pointerEvents: active ? "none" : "auto",
-				color: active
-					? theme.palette.text.primary
-					: theme.palette.text.secondary,
-				"&:hover": {
-					background: theme.palette.action.hover,
-					color: theme.palette.text.primary,
-				},
-				paddingTop: 10,
-				paddingBottom: 10,
-			})}
+			className={cn(
+				"border-none text-sm w-full text-left px-6 py-2.5 cursor-pointer",
+				active
+					? "bg-surface-secondary text-content-primary pointer-events-none"
+					: "bg-transparent text-content-secondary hover:bg-surface-tertiary hover:text-content-primary",
+			)}
 			{...attrs}
 		>
 			{children}
@@ -61,14 +48,7 @@ export const SidebarCaption: FC<HTMLAttributes<HTMLDivElement>> = ({
 }) => {
 	return (
 		<div
-			css={(theme) => ({
-				fontSize: 10,
-				textTransform: "uppercase",
-				fontWeight: 500,
-				color: theme.palette.text.secondary,
-				padding: "12px 24px",
-				letterSpacing: "0.5px",
-			})}
+			className="text-2xs uppercase font-medium text-content-secondary py-3 px-6 tracking-[0.5px]"
 			{...attrs}
 		>
 			{children}

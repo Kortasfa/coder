@@ -1,4 +1,3 @@
-import type { Interpolation, Theme } from "@emotion/react";
 import { EllipsisVertical, UserPlusIcon } from "lucide-react";
 import { type FC, useState } from "react";
 import { useMutation, useQueryClient } from "react-query";
@@ -35,6 +34,7 @@ import {
 	TableRow,
 } from "#/components/Table/Table";
 import { isEveryoneGroup } from "#/modules/groups";
+import { cn } from "#/utils/cn";
 import type { GroupPageOutletContext } from "./GroupPage";
 
 const GroupMembersPage: FC = () => {
@@ -213,9 +213,12 @@ const GroupMemberRow: FC<GroupMemberRowProps> = ({
 			</TableCell>
 			<TableCell
 				width="40%"
-				css={[styles.status, member.status === "suspended" && styles.suspended]}
+				className={cn(
+					"capitalize",
+					member.status === "suspended" && "text-content-secondary",
+				)}
 			>
-				<div>{member.status}</div>
+				<div>{member.status}</div>{" "}
 				<LastSeen at={member.last_seen_at} className="text-xs" />
 			</TableCell>
 			<TableCell width="1%">
@@ -242,14 +245,5 @@ const GroupMemberRow: FC<GroupMemberRowProps> = ({
 		</TableRow>
 	);
 };
-
-const styles = {
-	status: {
-		textTransform: "capitalize",
-	},
-	suspended: (theme) => ({
-		color: theme.palette.text.secondary,
-	}),
-} satisfies Record<string, Interpolation<Theme>>;
 
 export default GroupMembersPage;

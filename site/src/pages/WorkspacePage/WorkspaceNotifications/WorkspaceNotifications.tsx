@@ -1,4 +1,3 @@
-import type { Interpolation, Theme } from "@emotion/react";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
 import { InfoIcon, TriangleAlertIcon } from "lucide-react";
@@ -242,7 +241,7 @@ export const WorkspaceNotifications: FC<WorkspaceNotificationsProps> = ({
 	}
 
 	return (
-		<div css={styles.notificationsGroup}>
+		<div className="flex items-center gap-3">
 			{infoNotifications.length > 0 && (
 				<Notifications
 					items={infoNotifications}
@@ -261,14 +260,6 @@ export const WorkspaceNotifications: FC<WorkspaceNotificationsProps> = ({
 		</div>
 	);
 };
-
-const styles = {
-	notificationsGroup: {
-		display: "flex",
-		alignItems: "center",
-		gap: 12,
-	},
-} satisfies Record<string, Interpolation<Theme>>;
 
 export const findTroubleshootingURL = (
 	workspaceBuild: WorkspaceBuild,

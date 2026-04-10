@@ -1,9 +1,9 @@
-import type { Interpolation, Theme } from "@emotion/react";
 import type { FC } from "react";
 import { Link, useSearchParams } from "react-router";
 import type { TemplateExample } from "#/api/typesGenerated";
 import { Stack } from "#/components/Stack/Stack";
 import { TemplateExampleCard } from "#/modules/templates/TemplateExampleCard/TemplateExampleCard";
+import { cn } from "#/utils/cn";
 import type { StarterTemplatesByTag } from "#/utils/starterTemplates";
 
 const getTagLabel = (tag: string) => {
@@ -67,13 +67,20 @@ export const StarterTemplates: FC<StarterTemplatesProps> = ({
 		<Stack direction="row" spacing={4} alignItems="flex-start">
 			{starterTemplatesByTag && tags && (
 				<Stack className="w-[202px] shrink-0 sticky">
-					<h2 css={styles.sectionTitle}>Choose a starter template</h2>
-					<span css={styles.filterCaption}>Filter</span>
+					<h2 className="text-content-primary text-base font-normal m-0">
+						Choose a starter template
+					</h2>
+					<span className="uppercase font-semibold text-xs text-content-secondary tracking-[0.1em]">
+						Filter
+					</span>
 					{tags.map((tag) => (
 						<Link
 							key={tag}
 							to={`?tag=${tag}`}
-							css={[styles.tagLink, tag === activeTag && styles.tagLinkActive]}
+							className={cn(
+								"text-content-secondary no-underline text-sm capitalize hover:text-content-primary",
+								tag === activeTag && "text-content-primary font-semibold",
+							)}
 						>
 							{getTagLabel(tag)} ({starterTemplatesByTag[tag].length})
 						</Link>
@@ -84,9 +91,7 @@ export const StarterTemplates: FC<StarterTemplatesProps> = ({
 			<div className="flex flex-wrap gap-8 h-max">
 				{visibleTemplates?.map((example) => (
 					<TemplateExampleCard
-						css={(theme) => ({
-							backgroundColor: theme.palette.background.paper,
-						})}
+						className="bg-surface-secondary"
 						example={example}
 						key={example.id}
 						activeTag={activeTag}
@@ -96,36 +101,3 @@ export const StarterTemplates: FC<StarterTemplatesProps> = ({
 		</Stack>
 	);
 };
-
-const styles = {
-	filterCaption: (theme) => ({
-		textTransform: "uppercase",
-		fontWeight: 600,
-		fontSize: 12,
-		color: theme.palette.text.secondary,
-		letterSpacing: "0.1em",
-	}),
-
-	tagLink: (theme) => ({
-		color: theme.palette.text.secondary,
-		textDecoration: "none",
-		fontSize: 14,
-		textTransform: "capitalize",
-
-		"&:hover": {
-			color: theme.palette.text.primary,
-		},
-	}),
-
-	tagLinkActive: (theme) => ({
-		color: theme.palette.text.primary,
-		fontWeight: 600,
-	}),
-
-	sectionTitle: (theme) => ({
-		color: theme.palette.text.primary,
-		fontSize: 16,
-		fontWeight: 400,
-		margin: 0,
-	}),
-} satisfies Record<string, Interpolation<Theme>>;

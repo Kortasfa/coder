@@ -1,4 +1,3 @@
-import type { Interpolation, Theme } from "@emotion/react";
 import { Children, type FC, type JSX, useState } from "react";
 import type { WorkspaceAgent, WorkspaceResource } from "#/api/typesGenerated";
 import { ChevronDownIcon } from "#/components/AnimatedIcons/ChevronDown";
@@ -13,66 +12,6 @@ import {
 } from "#/components/Tooltip/Tooltip";
 import { ResourceAvatar } from "./ResourceAvatar";
 import { SensitiveValue } from "./SensitiveValue";
-
-const styles = {
-	resourceCard: (theme) => ({
-		border: `1px solid ${theme.palette.divider}`,
-		background: theme.palette.background.default,
-
-		"&:not(:last-child)": {
-			borderBottom: 0,
-		},
-
-		"&:first-of-type": {
-			borderTopLeftRadius: 8,
-			borderTopRightRadius: 8,
-		},
-
-		"&:last-child": {
-			borderBottomLeftRadius: 8,
-			borderBottomRightRadius: 8,
-		},
-	}),
-
-	resourceCardProfile: {
-		flexShrink: 0,
-		width: "fit-content",
-		minWidth: 220,
-	},
-
-	resourceCardHeader: (theme) => ({
-		padding: "24px 32px",
-		borderBottom: `1px solid ${theme.palette.divider}`,
-
-		"&:last-child": {
-			borderBottom: 0,
-		},
-
-		[theme.breakpoints.down("md")]: {
-			width: "100%",
-			overflow: "scroll",
-		},
-	}),
-
-	metadata: () => ({
-		lineHeight: "1.5",
-		fontSize: 14,
-	}),
-
-	metadataLabel: (theme) => ({
-		fontSize: 12,
-		color: theme.palette.text.secondary,
-		textOverflow: "ellipsis",
-		overflow: "hidden",
-		whiteSpace: "nowrap",
-	}),
-
-	metadataValue: () => ({
-		textOverflow: "ellipsis",
-		overflow: "hidden",
-		whiteSpace: "nowrap",
-	}),
-} satisfies Record<string, Interpolation<Theme>>;
 
 interface ResourceCardProps {
 	resource: WorkspaceResource;
@@ -96,20 +35,29 @@ export const ResourceCard: FC<ResourceCardProps> = ({ resource, agentRow }) => {
 	const gridWidth = mLength === 1 ? 1 : 4;
 
 	return (
-		<div key={resource.id} css={styles.resourceCard} className="resource-card">
+		<div
+			key={resource.id}
+			className="resource-card border border-solid border-border bg-surface-primary [&:not(:last-child)]:border-b-0 first-of-type:rounded-t-[8px] last:rounded-b-[8px]"
+		>
 			<Stack
 				direction="row"
 				alignItems="flex-start"
-				css={styles.resourceCardHeader}
+				className="py-6 px-8 border-0 border-b border-solid border-border last:border-b-0 max-[900px]:w-full max-[900px]:overflow-scroll"
 				spacing={10}
 			>
-				<Stack direction="row" spacing={1} css={styles.resourceCardProfile}>
+				<Stack
+					direction="row"
+					spacing={1}
+					className="shrink-0 w-fit min-w-[220px]"
+				>
 					<div>
 						<ResourceAvatar resource={resource} />
 					</div>
-					<div css={styles.metadata}>
-						<div css={styles.metadataLabel}>{resource.type}</div>
-						<div css={styles.metadataValue}>{resource.name}</div>
+					<div className="text-[14px] leading-normal">
+						<div className="text-[12px] text-content-secondary truncate">
+							{resource.type}
+						</div>
+						<div className="truncate">{resource.name}</div>
 					</div>
 				</Stack>
 
@@ -120,18 +68,20 @@ export const ResourceCard: FC<ResourceCardProps> = ({ resource, agentRow }) => {
 					}}
 				>
 					{resource.daily_cost > 0 && (
-						<div css={styles.metadata}>
-							<div css={styles.metadataLabel}>
+						<div className="text-[14px] leading-normal">
+							<div className="text-[12px] text-content-secondary truncate">
 								<b>Daily cost</b>
 							</div>
-							<div css={styles.metadataValue}>{resource.daily_cost}</div>
+							<div className="truncate">{resource.daily_cost}</div>
 						</div>
 					)}
 					{visibleMetadata.map((meta) => {
 						return (
-							<div css={styles.metadata} key={meta.key}>
-								<div css={styles.metadataLabel}>{meta.key}</div>
-								<div css={styles.metadataValue}>
+							<div className="text-[14px] leading-normal" key={meta.key}>
+								<div className="text-[12px] text-content-secondary truncate">
+									{meta.key}
+								</div>
+								<div className="truncate">
 									{meta.sensitive ? (
 										<SensitiveValue value={meta.value} />
 									) : (

@@ -13,7 +13,6 @@
  * went with a simpler design. If we decide we really do need to display the
  * users like that, though, know that it will be painful
  */
-import { type Interpolation, type Theme, useTheme } from "@emotion/react";
 import type { FC } from "react";
 import type { LoginType, SlimRole } from "#/api/typesGenerated";
 import { Pill } from "#/components/Pill/Pill";
@@ -78,12 +77,12 @@ export const UserRoleCell: FC<UserRoleCellProps> = ({
 				)}
 
 				<Pill
-					css={
+					className={
 						hasOwnerRole
-							? styles.ownerRoleBadge
+							? "bg-surface-sky border-border-pending"
 							: mainDisplayRole.global
-								? styles.globalRoleBadge
-								: styles.roleBadge
+								? "bg-surface-sky border-border-pending"
+								: "bg-surface-tertiary border-border"
 					}
 				>
 					{mainDisplayRole.global ? (
@@ -111,18 +110,11 @@ type OverflowRolePillProps = {
 };
 
 const OverflowRolePill: FC<OverflowRolePillProps> = ({ roles }) => {
-	const theme = useTheme();
-
 	return (
 		<TooltipProvider>
 			<Tooltip delayDuration={0}>
 				<TooltipTrigger asChild>
-					<Pill
-						css={{
-							backgroundColor: theme.palette.background.paper,
-							borderColor: theme.palette.divider,
-						}}
-					>
+					<Pill className="bg-surface-secondary border-border">
 						+{roles.length} more
 					</Pill>
 				</TooltipTrigger>
@@ -131,7 +123,11 @@ const OverflowRolePill: FC<OverflowRolePillProps> = ({ roles }) => {
 					{roles.map((role) => (
 						<Pill
 							key={role.name}
-							css={role.global ? styles.globalRoleBadge : styles.roleBadge}
+							className={
+								role.global
+									? "bg-surface-sky border-border-pending"
+									: "bg-surface-tertiary border-border"
+							}
 						>
 							{role.global ? (
 								<span title="This user has this role for all organizations.">
@@ -147,21 +143,6 @@ const OverflowRolePill: FC<OverflowRolePillProps> = ({ roles }) => {
 		</TooltipProvider>
 	);
 };
-
-const styles = {
-	globalRoleBadge: (theme) => ({
-		backgroundColor: theme.roles.active.background,
-		borderColor: theme.roles.active.outline,
-	}),
-	ownerRoleBadge: (theme) => ({
-		backgroundColor: theme.roles.notice.background,
-		borderColor: theme.roles.notice.outline,
-	}),
-	roleBadge: (theme) => ({
-		backgroundColor: theme.experimental.l2.background,
-		borderColor: theme.experimental.l2.outline,
-	}),
-} satisfies Record<string, Interpolation<Theme>>;
 
 const fallbackRole: TieredSlimRole = {
 	name: "member",
