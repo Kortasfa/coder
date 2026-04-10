@@ -18,6 +18,7 @@ import { AgentPageHeader } from "./components/AgentPageHeader";
 import { ChimeButton } from "./components/ChimeButton";
 import { WebPushButton } from "./components/WebPushButton";
 import { getModelOptionsFromConfigs } from "./utils/modelOptions";
+import { buildAgentChatPath } from "./utils/planMode";
 
 const lastModelConfigIDStorageKey = "agents.last-model-config-id";
 const nilUUID = "00000000-0000-0000-0000-000000000000";
@@ -72,7 +73,12 @@ const AgentCreatePage: FC = () => {
 		} else {
 			localStorage.removeItem(lastModelConfigIDStorageKey);
 		}
-		navigate(`/agents/${createdChat.id}`);
+		navigate(
+			buildAgentChatPath({
+				chatId: createdChat.id,
+				planModeEnabled: turnMode === "plan",
+			}),
+		);
 	};
 
 	return (

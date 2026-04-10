@@ -36,6 +36,7 @@ import {
 import type * as TypesGen from "#/api/typesGenerated";
 import type { ChatMessagePart } from "#/api/typesGenerated";
 import { useProxy } from "#/contexts/ProxyContext";
+import { useSearchParamsKey } from "#/hooks/useSearchParamsKey";
 import {
 	getTerminalHref,
 	getVSCodeHref,
@@ -80,6 +81,10 @@ import {
 	hasUserFixableProviders,
 	resolveModelOptionId,
 } from "./utils/modelOptions";
+import {
+	PLAN_MODE_SEARCH_PARAM,
+	PLAN_MODE_SEARCH_VALUE,
+} from "./utils/planMode";
 import { parsePullRequestUrl } from "./utils/pullRequest";
 import {
 	type ChatDetailError,
@@ -533,7 +538,11 @@ const AgentChatPage: FC = () => {
 	} = useOutletContext<AgentsOutletContext>();
 	const queryClient = useQueryClient();
 	const [selectedModel, setSelectedModel] = useState("");
-	const [planModeEnabled, setPlanModeEnabled] = useState(false);
+	const planModeSearchParam = useSearchParamsKey({
+		key: PLAN_MODE_SEARCH_PARAM,
+		replace: true,
+	});
+	const planModeEnabled = planModeSearchParam.value === PLAN_MODE_SEARCH_VALUE;
 	const planModeToggleVersionRef = useRef(0);
 
 	const scrollToBottomRef = useRef<(() => void) | null>(null);
@@ -864,6 +873,14 @@ const AgentChatPage: FC = () => {
 
 	const isWorkspaceLoading =
 		workspacesQuery.isLoading || updateChatWorkspaceMutation.isPending;
+	const setPlanModeEnabled = (enabled: boolean) => {
+		if (enabled) {
+			planModeSearchParam.setValue(PLAN_MODE_SEARCH_VALUE);
+			return;
+		}
+		planModeSearchParam.deleteValue();
+	};
+
 	const handlePlanModeToggle = (enabled: boolean) => {
 		planModeToggleVersionRef.current += 1;
 		setPlanModeEnabled(enabled);

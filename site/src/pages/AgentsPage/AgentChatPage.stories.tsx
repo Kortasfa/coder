@@ -28,6 +28,10 @@ import {
 } from "#/testHelpers/storybook";
 import AgentChatPage, { RIGHT_PANEL_OPEN_KEY } from "./AgentChatPage";
 import type { AgentsOutletContext } from "./AgentsPage";
+import {
+	PLAN_MODE_SEARCH_PARAM,
+	PLAN_MODE_SEARCH_VALUE,
+} from "./utils/planMode";
 
 // ---------------------------------------------------------------------------
 // Layout wrapper – provides outlet context for the child route.
@@ -606,6 +610,57 @@ export const Loading: Story = {
 			{ messages: [], queued_messages: [], has_more: false },
 			{ diffUrl: undefined },
 		),
+	},
+};
+
+export const PlanModeFromQueryParam: Story = {
+	parameters: {
+		queries: buildQueries(
+			{
+				id: CHAT_ID,
+				...baseChatFields,
+				title: "Plan mode persists",
+				status: "completed",
+			},
+			{ messages: [], queued_messages: [], has_more: false },
+			{ diffUrl: undefined },
+		),
+		reactRouter: reactRouterParameters({
+			location: {
+				path: `/agents/${CHAT_ID}`,
+				pathParams: { agentId: CHAT_ID },
+				searchParams: {
+					[PLAN_MODE_SEARCH_PARAM]: PLAN_MODE_SEARCH_VALUE,
+				},
+			},
+			routing: reactRouterOutlet(
+				{ path: "/agents/:agentId" },
+				<AgentChatPage />,
+			),
+		}),
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const body = within(canvasElement.ownerDocument.body);
+		const user = userEvent.setup();
+
+		expect(await canvas.findByText("Planning")).toBeVisible();
+
+		await user.click(canvas.getByRole("button", { name: "More options" }));
+		await body.findByRole("dialog");
+		const toggles = await body.findAllByRole("menuitemcheckbox", {
+			name: "Plan first",
+		});
+		const toggle = toggles.at(-1);
+		if (!toggle) {
+			throw new Error("Plan mode toggle did not render.");
+		}
+		expect(toggle).toHaveAttribute("aria-checked", "true");
+		await user.click(toggle);
+
+		await waitFor(() => {
+			expect(canvas.queryByText("Planning")).not.toBeInTheDocument();
+		});
 	},
 };
 
