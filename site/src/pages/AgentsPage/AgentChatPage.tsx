@@ -10,7 +10,7 @@ import { useOutletContext, useParams } from "react-router";
 import { toast } from "sonner";
 import type { UrlTransform } from "streamdown";
 import { API, watchWorkspace } from "#/api/api";
-import { isApiError } from "#/api/errors";
+import { getErrorMessage, isApiError } from "#/api/errors";
 import { buildOptimisticEditedMessage } from "#/api/queries/chatMessageEdits";
 import {
 	chat,
@@ -24,10 +24,15 @@ import {
 	interruptChat,
 	mcpServerConfigs,
 	promoteChatQueuedMessage,
+	updateChatWorkspace,
 	userCompactionThresholds,
 } from "#/api/queries/chats";
 import { deploymentSSHConfig } from "#/api/queries/deployment";
-import { workspaceById, workspaceByIdKey } from "#/api/queries/workspaces";
+import {
+	workspaceById,
+	workspaceByIdKey,
+	workspaces,
+} from "#/api/queries/workspaces";
 import type * as TypesGen from "#/api/typesGenerated";
 import type { ChatMessagePart } from "#/api/typesGenerated";
 import { useProxy } from "#/contexts/ProxyContext";
@@ -584,6 +589,7 @@ const AgentChatPage: FC = () => {
 	const userThresholdsQuery = useQuery(userCompactionThresholds());
 	const desktopEnabledQuery = useQuery(chatDesktopEnabled());
 	const mcpServersQuery = useQuery(mcpServerConfigs());
+	const workspacesQuery = useQuery(workspaces({ q: "owner:me", limit: 0 }));
 	const desktopEnabled = desktopEnabledQuery.data?.enable_desktop ?? false;
 
 	// MCP server selection state.
@@ -748,6 +754,14 @@ const AgentChatPage: FC = () => {
 	const { mutateAsync: promoteQueuedMessage } = useMutation(
 		promoteChatQueuedMessage(queryClient, agentId ?? ""),
 	);
+	const updateChatWorkspaceBase = updateChatWorkspace(queryClient);
+	const updateChatWorkspaceMutation = useMutation({
+		...updateChatWorkspaceBase,
+		onError: (error, variables, context) => {
+			updateChatWorkspaceBase.onError(error, variables, context);
+			toast.error(getErrorMessage(error, "Failed to update workspace."));
+		},
+	});
 
 	const { store, clearStreamError, upsertCacheMessages } = useChatStore({
 		chatID: agentId,
@@ -845,6 +859,7 @@ const AgentChatPage: FC = () => {
 	const isSubmissionPending =
 		isSendPending || isEditPending || isInterruptPending;
 	const isInputDisabled = !hasModelOptions || isArchived;
+	const selectedWorkspaceId = chatQuery.data?.workspace_id ?? null;
 
 	const handleUsageLimitError = (error: unknown): void => {
 		if (!agentId) {
@@ -877,6 +892,16 @@ const AgentChatPage: FC = () => {
 			return;
 		}
 		void interrupt();
+	};
+
+	const handleWorkspaceChange = (nextWorkspaceId: string | null) => {
+		if (!agentId || nextWorkspaceId === selectedWorkspaceId) {
+			return;
+		}
+		updateChatWorkspaceMutation.mutate({
+			chatId: agentId,
+			workspaceId: nextWorkspaceId,
+		});
 	};
 
 	const handleDeleteQueuedMessage = async (id: number) => {
@@ -1316,6 +1341,12 @@ const AgentChatPage: FC = () => {
 			isInputDisabled={isInputDisabled}
 			isSubmissionPending={isSubmissionPending}
 			isInterruptPending={isInterruptPending}
+			workspaceOptions={workspacesQuery.data?.workspaces ?? []}
+			selectedWorkspaceId={selectedWorkspaceId}
+			onWorkspaceChange={handleWorkspaceChange}
+			isWorkspaceLoading={
+				workspacesQuery.isLoading || updateChatWorkspaceMutation.isPending
+			}
 			isSidebarCollapsed={isSidebarCollapsed}
 			onToggleSidebarCollapsed={onToggleSidebarCollapsed}
 			showSidebarPanel={showSidebarPanel}

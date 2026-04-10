@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { MonitorDotIcon } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import type * as TypesGen from "#/api/typesGenerated";
@@ -627,6 +628,44 @@ export const PlanFirstCheckedState: Story = {
 		});
 		const toggle = toggles.at(-1)!;
 		expect(toggle).toHaveAttribute("aria-checked", "true");
+	},
+};
+
+export const DetailPageWorkspacePicker: Story = {
+	args: {
+		workspaceOptions: [
+			{
+				id: "ws-detail",
+				name: "agents-workspace",
+				owner_name: "mike",
+			},
+		],
+		selectedWorkspaceId: "ws-detail",
+		onWorkspaceChange: fn(),
+		attachedWorkspace: {
+			id: "ws-detail",
+			name: "agents-workspace",
+			route: "/@mike/agents-workspace",
+			statusIcon: <MonitorDotIcon className="size-3" />,
+			statusLabel: "Workspace running",
+		},
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const body = within(canvasElement.ownerDocument.body);
+
+		expect(canvas.getAllByText("agents-workspace")).toHaveLength(1);
+		expect(
+			canvas.queryByRole("button", {
+				name: "Remove workspace agents-workspace",
+			}),
+		).not.toBeInTheDocument();
+
+		await userEvent.click(canvas.getByRole("button", { name: "More options" }));
+		const plusMenu = await body.findByRole("dialog");
+		expect(
+			within(plusMenu).getByRole("button", { name: "Attach workspace" }),
+		).toBeVisible();
 	},
 };
 

@@ -115,6 +115,10 @@ interface AgentChatPageViewProps {
 	isInputDisabled: boolean;
 	isSubmissionPending: boolean;
 	isInterruptPending: boolean;
+	workspaceOptions?: readonly TypesGen.Workspace[];
+	selectedWorkspaceId?: string | null;
+	onWorkspaceChange?: (workspaceId: string | null) => void;
+	isWorkspaceLoading?: boolean;
 
 	// Sidebar / panel state.
 	isSidebarCollapsed: boolean;
@@ -205,6 +209,10 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 	isInputDisabled,
 	isSubmissionPending,
 	isInterruptPending,
+	workspaceOptions = [],
+	selectedWorkspaceId = null,
+	onWorkspaceChange = () => {},
+	isWorkspaceLoading = false,
 	isSidebarCollapsed,
 	onToggleSidebarCollapsed,
 	showSidebarPanel,
@@ -321,6 +329,7 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 			warning: <MonitorXIcon className={iconCls} />,
 		};
 		return {
+			id: workspace.id,
 			name: workspace.name,
 			route: workspaceRoute,
 			statusIcon: statusIconMap[effectiveType],
@@ -447,6 +456,10 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 									planModeEnabled={planModeEnabled}
 									onPlanModeToggle={onPlanModeToggle}
 									isModelCatalogLoading={isModelCatalogLoading}
+									workspaceOptions={workspaceOptions}
+									selectedWorkspaceId={selectedWorkspaceId}
+									onWorkspaceChange={onWorkspaceChange}
+									isWorkspaceLoading={isWorkspaceLoading}
 									inputRef={editing.chatInputRef}
 									initialValue={editing.editorInitialValue}
 									initialEditorState={editing.initialEditorState}

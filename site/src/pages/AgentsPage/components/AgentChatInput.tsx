@@ -154,6 +154,7 @@ interface AgentChatInputProps {
 }
 
 export interface AttachedWorkspaceInfo {
+	id: string;
 	name: string;
 	route: string;
 	statusIcon: React.ReactNode;
@@ -385,6 +386,11 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 		(ws) => ws.id === selectedWorkspaceId,
 	);
 
+	const shouldShowSelectedWorkspaceBadge = selectedWorkspace
+		? Boolean(onWorkspaceChange) &&
+			selectedWorkspace.id !== attachedWorkspace?.id
+		: false;
+
 	const enabledMcpServers = mcpServers?.filter((s) => s.enabled) ?? [];
 	const activeMcpServers = enabledMcpServers.filter(
 		(s) =>
@@ -402,7 +408,7 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 	if (attachedWorkspace) {
 		allBadges.push({ kind: "attached-workspace", ...attachedWorkspace });
 	}
-	if (selectedWorkspace && onWorkspaceChange) {
+	if (shouldShowSelectedWorkspaceBadge && selectedWorkspace) {
 		allBadges.push({ kind: "workspace", name: selectedWorkspace.name });
 	}
 	for (const s of activeMcpServers) {
