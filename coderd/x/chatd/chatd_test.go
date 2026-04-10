@@ -579,6 +579,173 @@ func TestSendMessageQueueBehaviorQueuesWhenBusy(t *testing.T) {
 	require.Len(t, messages, 1)
 }
 
+func TestCreateChatPersistsTurnMode(t *testing.T) {
+	t.Parallel()
+
+	db, ps := dbtestutil.NewDB(t)
+	replica := newTestServer(t, db, ps, uuid.New())
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	user, model := seedChatDependencies(ctx, t, db)
+
+	chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:            user.ID,
+		Title:              "plan-mode-create",
+		ModelConfigID:      model.ID,
+		TurnMode:           "plan",
+		InitialUserContent: []codersdk.ChatMessagePart{codersdk.ChatMessageText("plan this")},
+	})
+	require.NoError(t, err)
+
+	messages, err := db.GetChatMessagesByChatID(ctx, database.GetChatMessagesByChatIDParams{
+		ChatID:  chat.ID,
+		AfterID: 0,
+	})
+	require.NoError(t, err)
+
+	var userMsg *database.ChatMessage
+	for i, msg := range messages {
+		if msg.Role == database.ChatMessageRoleUser {
+			userMsg = &messages[i]
+			break
+		}
+	}
+	require.NotNil(t, userMsg, "expected a user message")
+	require.True(t, userMsg.TurnMode.Valid)
+	require.Equal(t, database.ChatTurnModePlan, userMsg.TurnMode.ChatTurnMode)
+
+	for _, msg := range messages {
+		if msg.Role == database.ChatMessageRoleSystem {
+			require.False(t, msg.TurnMode.Valid, "system message should have NULL turn_mode")
+		}
+	}
+}
+
+func TestCreateChatDefaultTurnModeIsNull(t *testing.T) {
+	t.Parallel()
+
+	db, ps := dbtestutil.NewDB(t)
+	replica := newTestServer(t, db, ps, uuid.New())
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	user, model := seedChatDependencies(ctx, t, db)
+
+	chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:            user.ID,
+		Title:              "default-mode-create",
+		ModelConfigID:      model.ID,
+		InitialUserContent: []codersdk.ChatMessagePart{codersdk.ChatMessageText("hello")},
+	})
+	require.NoError(t, err)
+
+	messages, err := db.GetChatMessagesByChatID(ctx, database.GetChatMessagesByChatIDParams{
+		ChatID:  chat.ID,
+		AfterID: 0,
+	})
+	require.NoError(t, err)
+
+	for _, msg := range messages {
+		require.False(t, msg.TurnMode.Valid,
+			"all messages should have NULL turn_mode when not specified, got valid for role=%s", msg.Role)
+	}
+}
+
+func TestSendMessagePersistsTurnMode(t *testing.T) {
+	t.Parallel()
+
+	db, ps := dbtestutil.NewDB(t)
+	replica := newTestServer(t, db, ps, uuid.New())
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	user, model := seedChatDependencies(ctx, t, db)
+
+	chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:            user.ID,
+		Title:              "send-plan-mode",
+		ModelConfigID:      model.ID,
+		InitialUserContent: []codersdk.ChatMessagePart{codersdk.ChatMessageText("hello")},
+	})
+	require.NoError(t, err)
+
+	result, err := replica.SendMessage(ctx, chatd.SendMessageOptions{
+		ChatID:    chat.ID,
+		CreatedBy: user.ID,
+		Content:   []codersdk.ChatMessagePart{codersdk.ChatMessageText("plan step")},
+		TurnMode:  "plan",
+	})
+	require.NoError(t, err)
+
+	if result.Queued {
+		require.NotNil(t, result.QueuedMessage)
+		require.True(t, result.QueuedMessage.TurnMode.Valid)
+		require.Equal(t, database.ChatTurnModePlan, result.QueuedMessage.TurnMode.ChatTurnMode)
+		return
+	}
+
+	messages, err := db.GetChatMessagesByChatID(ctx, database.GetChatMessagesByChatIDParams{
+		ChatID:  chat.ID,
+		AfterID: 0,
+	})
+	require.NoError(t, err)
+
+	var lastUserMsg *database.ChatMessage
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == database.ChatMessageRoleUser {
+			lastUserMsg = &messages[i]
+			break
+		}
+	}
+	require.NotNil(t, lastUserMsg)
+	require.Equal(t, result.Message.ID, lastUserMsg.ID)
+	require.True(t, lastUserMsg.TurnMode.Valid)
+	require.Equal(t, database.ChatTurnModePlan, lastUserMsg.TurnMode.ChatTurnMode)
+}
+
+func TestSendMessageQueuedPersistsTurnMode(t *testing.T) {
+	t.Parallel()
+
+	db, ps := dbtestutil.NewDB(t)
+	replica := newTestServer(t, db, ps, uuid.New())
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	user, model := seedChatDependencies(ctx, t, db)
+
+	chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:            user.ID,
+		Title:              "queued-plan-mode",
+		ModelConfigID:      model.ID,
+		InitialUserContent: []codersdk.ChatMessagePart{codersdk.ChatMessageText("hello")},
+	})
+	require.NoError(t, err)
+
+	workerID := uuid.New()
+	chat, err = db.UpdateChatStatus(ctx, database.UpdateChatStatusParams{
+		ID:          chat.ID,
+		Status:      database.ChatStatusRunning,
+		WorkerID:    uuid.NullUUID{UUID: workerID, Valid: true},
+		StartedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+		HeartbeatAt: sql.NullTime{Time: time.Now(), Valid: true},
+	})
+	require.NoError(t, err)
+
+	result, err := replica.SendMessage(ctx, chatd.SendMessageOptions{
+		ChatID:       chat.ID,
+		CreatedBy:    user.ID,
+		Content:      []codersdk.ChatMessagePart{codersdk.ChatMessageText("queued plan")},
+		TurnMode:     "plan",
+		BusyBehavior: chatd.SendMessageBusyBehaviorQueue,
+	})
+	require.NoError(t, err)
+	require.True(t, result.Queued)
+	require.NotNil(t, result.QueuedMessage)
+
+	queued, err := db.GetChatQueuedMessages(ctx, chat.ID)
+	require.NoError(t, err)
+	require.Len(t, queued, 1)
+	require.True(t, queued[0].TurnMode.Valid)
+	require.Equal(t, database.ChatTurnModePlan, queued[0].TurnMode.ChatTurnMode)
+}
+
 func TestSendMessageQueuesWhenWaitingWithQueuedBacklog(t *testing.T) {
 	t.Parallel()
 
