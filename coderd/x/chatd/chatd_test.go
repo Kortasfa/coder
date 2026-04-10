@@ -17,7 +17,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	_ "unsafe"
 
+	"charm.land/fantasy"
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -53,6 +55,79 @@ import (
 	"github.com/coder/coder/v2/testutil"
 	"github.com/coder/quartz"
 )
+
+type linkedTurnPolicy struct {
+	_ bool
+}
+
+//go:linkname resolveTurnPolicyForTest github.com/coder/coder/v2/coderd/x/chatd.resolveTurnPolicy
+func resolveTurnPolicyForTest(mode database.NullChatTurnMode) linkedTurnPolicy
+
+//go:linkname turnPolicyAllowedToolsForTest github.com/coder/coder/v2/coderd/x/chatd.turnPolicy.allowedTools
+func turnPolicyAllowedToolsForTest(tp linkedTurnPolicy, allTools []fantasy.AgentTool) []string
+
+//go:linkname turnPolicyStopAfterToolsForTest github.com/coder/coder/v2/coderd/x/chatd.turnPolicy.stopAfterTools
+func turnPolicyStopAfterToolsForTest(tp linkedTurnPolicy) map[string]bool
+
+type recordedOpenAIRequest struct {
+	Messages []chattest.OpenAIMessage
+	Tools    []string
+}
+
+func recordOpenAIRequest(req *chattest.OpenAIRequest) recordedOpenAIRequest {
+	messages := append([]chattest.OpenAIMessage(nil), req.Messages...)
+	tools := make([]string, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		tools = append(tools, tool.Function.Name)
+	}
+	return recordedOpenAIRequest{
+		Messages: messages,
+		Tools:    tools,
+	}
+}
+
+func requestHasSystemSubstring(req recordedOpenAIRequest, want string) bool {
+	for _, msg := range req.Messages {
+		if msg.Role == "system" && strings.Contains(msg.Content, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func newWorkspaceToolTestServer(
+	t *testing.T,
+	db database.Store,
+	ps dbpubsub.Pubsub,
+	agentID uuid.UUID,
+	planContent string,
+) *chatd.Server {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	mockConn := agentconnmock.NewMockAgentConn(ctrl)
+	mockConn.EXPECT().SetExtraHeaders(gomock.Any()).AnyTimes()
+	mockConn.EXPECT().ContextConfig(gomock.Any()).
+		Return(workspacesdk.ContextConfigResponse{}, xerrors.New("not supported")).AnyTimes()
+	mockConn.EXPECT().ListMCPTools(gomock.Any()).
+		Return(workspacesdk.ListMCPToolsResponse{}, nil).AnyTimes()
+	mockConn.EXPECT().LS(gomock.Any(), gomock.Any(), gomock.Any()).
+		Return(workspacesdk.LSResponse{}, nil).AnyTimes()
+	mockConn.EXPECT().ReadFile(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, path string, _, _ int64) (io.ReadCloser, string, error) {
+			if path == "/home/coder/PLAN.md" {
+				return io.NopCloser(strings.NewReader(planContent)), "", nil
+			}
+			return io.NopCloser(strings.NewReader("")), "", nil
+		}).AnyTimes()
+
+	return newActiveTestServer(t, db, ps, func(cfg *chatd.Config) {
+		cfg.AgentConn = func(_ context.Context, gotAgentID uuid.UUID) (workspacesdk.AgentConn, func(), error) {
+			require.Equal(t, agentID, gotAgentID)
+			return mockConn, func() {}, nil
+		}
+	})
+}
 
 func TestInterruptChatBroadcastsStatusAcrossInstances(t *testing.T) {
 	t.Parallel()
@@ -647,6 +722,272 @@ func TestCreateChatDefaultTurnModeIsNull(t *testing.T) {
 	for _, msg := range messages {
 		require.False(t, msg.TurnMode.Valid,
 			"all messages should have NULL turn_mode when not specified, got valid for role=%s", msg.Role)
+	}
+}
+
+func TestTurnPolicyHelpers(t *testing.T) {
+	t.Parallel()
+
+	newTool := func(name string) fantasy.AgentTool {
+		return fantasy.NewAgentTool(name, name, func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			return fantasy.NewTextErrorResponse("not implemented"), nil
+		})
+	}
+
+	allTools := []fantasy.AgentTool{
+		newTool("read_file"),
+		newTool("write_file"),
+		newTool("edit_files"),
+		newTool("execute"),
+		newTool("process_output"),
+		newTool("process_list"),
+		newTool("process_signal"),
+		newTool("propose_plan"),
+		newTool("spawn_agent"),
+		newTool("wait_agent"),
+		newTool("message_agent"),
+		newTool("close_agent"),
+		newTool("spawn_computer_use_agent"),
+		newTool("mcp_custom"),
+	}
+
+	t.Run("StandardTurnExcludesProposePlan", func(t *testing.T) {
+		t.Parallel()
+
+		standardPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{})
+		allowed := turnPolicyAllowedToolsForTest(standardPolicy, []fantasy.AgentTool{
+			newTool("read_file"),
+			newTool("write_file"),
+			newTool("execute"),
+			newTool("propose_plan"),
+			newTool("mcp_custom"),
+		})
+
+		require.NotContains(t, allowed, "propose_plan")
+		require.Contains(t, allowed, "read_file")
+		require.Contains(t, allowed, "write_file")
+		require.Contains(t, allowed, "execute")
+		require.Contains(t, allowed, "mcp_custom")
+	})
+
+	t.Run("PlanTurnKeepsOnlyAllowlistPlusUnknown", func(t *testing.T) {
+		t.Parallel()
+
+		planPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{
+			ChatTurnMode: database.ChatTurnModePlan,
+			Valid:        true,
+		})
+		allowed := turnPolicyAllowedToolsForTest(planPolicy, allTools)
+
+		for _, name := range []string{"read_file", "write_file", "edit_files", "propose_plan", "spawn_agent", "wait_agent", "mcp_custom"} {
+			require.Contains(t, allowed, name)
+		}
+		for _, name := range []string{"execute", "process_output", "process_list", "process_signal", "message_agent", "close_agent", "spawn_computer_use_agent"} {
+			require.NotContains(t, allowed, name)
+		}
+	})
+
+	t.Run("StandardTurnStopAfterToolsNil", func(t *testing.T) {
+		t.Parallel()
+
+		standardPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{})
+		require.Nil(t, turnPolicyStopAfterToolsForTest(standardPolicy))
+	})
+
+	t.Run("PlanTurnStopAfterToolsProposePlan", func(t *testing.T) {
+		t.Parallel()
+
+		planPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{
+			ChatTurnMode: database.ChatTurnModePlan,
+			Valid:        true,
+		})
+		require.Equal(t, map[string]bool{"propose_plan": true}, turnPolicyStopAfterToolsForTest(planPolicy))
+	})
+}
+
+func TestPlanTurnRootPolicy(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	db, ps := dbtestutil.NewDB(t)
+
+	var (
+		callCount     atomic.Int32
+		rootCallCount atomic.Int32
+		requests      []recordedOpenAIRequest
+		requestsMu    sync.Mutex
+	)
+	openAIURL := chattest.NewOpenAI(t, func(req *chattest.OpenAIRequest) chattest.OpenAIResponse {
+		if !req.Stream {
+			return chattest.OpenAINonStreamingResponse("title")
+		}
+
+		recordedReq := recordOpenAIRequest(req)
+		requestsMu.Lock()
+		requests = append(requests, recordedReq)
+		requestsMu.Unlock()
+		callCount.Add(1)
+
+		if slice.Contains(recordedReq.Tools, "spawn_agent") {
+			if rootCallCount.Add(1) == 1 {
+				return chattest.OpenAIStreamingResponse(
+					chattest.OpenAIToolCallChunk("spawn_agent", `{"prompt":"research","title":"sub"}`),
+				)
+			}
+			return chattest.OpenAIStreamingResponse(
+				chattest.OpenAIToolCallChunk("propose_plan", `{"path":"/home/coder/PLAN.md"}`),
+			)
+		}
+
+		return chattest.OpenAIStreamingResponse(
+			chattest.OpenAITextChunks("done")...,
+		)
+	})
+
+	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
+	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, `# Plan
+
+## Steps
+1. Do the thing
+`)
+
+	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "plan-turn-root-policy",
+		ModelConfigID: model.ID,
+		TurnMode:      "plan",
+		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText("Plan the feature"),
+		},
+	})
+	require.NoError(t, err)
+
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	require.Eventually(t, func() bool {
+		return callCount.Load() == 3
+	}, testutil.WaitLong, testutil.IntervalFast)
+
+	requestsMu.Lock()
+	recorded := append([]recordedOpenAIRequest(nil), requests...)
+	requestsMu.Unlock()
+
+	require.Len(t, recorded, 3, "expected exactly 3 streamed model calls")
+
+	var (
+		rootCalls  []recordedOpenAIRequest
+		childCalls []recordedOpenAIRequest
+	)
+	for _, req := range recorded {
+		if slice.Contains(req.Tools, "spawn_agent") {
+			rootCalls = append(rootCalls, req)
+			continue
+		}
+		childCalls = append(childCalls, req)
+	}
+	require.Len(t, rootCalls, 2, "expected exactly 2 root model calls")
+	require.Len(t, childCalls, 1, "expected exactly 1 child model call")
+	require.True(t, requestHasSystemSubstring(rootCalls[0], chatd.PlanningOverlayPrompt))
+	require.True(t, requestHasSystemSubstring(rootCalls[1], chatd.PlanningOverlayPrompt))
+
+	for _, name := range []string{"read_file", "write_file", "edit_files", "list_templates", "read_template", "create_workspace", "start_workspace", "propose_plan", "spawn_agent", "wait_agent"} {
+		require.Contains(t, rootCalls[0].Tools, name)
+	}
+	for _, name := range []string{"execute", "process_output", "process_list", "process_signal", "message_agent", "close_agent", "spawn_computer_use_agent"} {
+		require.NotContains(t, rootCalls[0].Tools, name)
+	}
+
+	require.NotContains(t, childCalls[0].Tools, "propose_plan")
+
+	allChats, err := db.GetChats(ctx, database.GetChatsParams{OwnerID: user.ID})
+	require.NoError(t, err)
+
+	var childChat database.Chat
+	for _, row := range allChats {
+		if row.Chat.ParentChatID.Valid && row.Chat.ParentChatID.UUID == chat.ID {
+			childChat = row.Chat
+			break
+		}
+	}
+	require.NotEqual(t, uuid.Nil, childChat.ID, "expected child chat")
+
+	messages, err := db.GetChatMessagesByChatID(ctx, database.GetChatMessagesByChatIDParams{
+		ChatID:  childChat.ID,
+		AfterID: 0,
+	})
+	require.NoError(t, err)
+
+	var firstUserMsg *database.ChatMessage
+	for i, msg := range messages {
+		if msg.Role == database.ChatMessageRoleUser {
+			firstUserMsg = &messages[i]
+			break
+		}
+	}
+	require.NotNil(t, firstUserMsg, "expected child user message")
+	require.True(t, firstUserMsg.TurnMode.Valid)
+	require.Equal(t, database.ChatTurnModePlan, firstUserMsg.TurnMode.ChatTurnMode)
+}
+
+func TestStandardTurnHidesProposePlan(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	db, ps := dbtestutil.NewDB(t)
+
+	var (
+		requests   []recordedOpenAIRequest
+		requestsMu sync.Mutex
+	)
+	openAIURL := chattest.NewOpenAI(t, func(req *chattest.OpenAIRequest) chattest.OpenAIResponse {
+		if !req.Stream {
+			return chattest.OpenAINonStreamingResponse("title")
+		}
+
+		requestsMu.Lock()
+		requests = append(requests, recordOpenAIRequest(req))
+		requestsMu.Unlock()
+
+		return chattest.OpenAIStreamingResponse(
+			chattest.OpenAITextChunks("here is the answer")...,
+		)
+	})
+
+	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
+	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
+
+	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "standard-turn-hides-propose-plan",
+		ModelConfigID: model.ID,
+		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText("Answer the question"),
+		},
+	})
+	require.NoError(t, err)
+
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	requestsMu.Lock()
+	recorded := append([]recordedOpenAIRequest(nil), requests...)
+	requestsMu.Unlock()
+
+	require.Len(t, recorded, 1, "expected exactly 1 streamed model call")
+	require.NotContains(t, recorded[0].Tools, "propose_plan")
+	for _, name := range []string{"execute", "process_output", "process_list", "process_signal"} {
+		require.Contains(t, recorded[0].Tools, name)
+	}
+	for _, name := range []string{"spawn_agent", "wait_agent", "message_agent", "close_agent"} {
+		require.Contains(t, recorded[0].Tools, name)
+	}
+	for _, msg := range recorded[0].Messages {
+		if msg.Role == "system" {
+			require.NotContains(t, msg.Content, chatd.PlanningOverlayPrompt)
+		}
 	}
 }
 
