@@ -88,6 +88,9 @@ func executeProposePlanTool(
 	if err != nil {
 		return fantasy.NewTextErrorResponse(err.Error()), nil
 	}
+	if len(data) == 0 || strings.TrimSpace(string(data)) == "" {
+		return fantasy.NewTextErrorResponse("plan file is empty; write your plan to " + canonicalPlanPath + " before proposing"), nil
+	}
 	if int64(len(data)) > maxProposePlanSize {
 		return fantasy.NewTextErrorResponse("plan file exceeds 32 KiB size limit"), nil
 	}
