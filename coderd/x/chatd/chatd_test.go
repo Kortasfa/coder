@@ -285,7 +285,7 @@ func TestSubagentChatExcludesWorkspaceProvisioningTools(t *testing.T) {
 	require.GreaterOrEqual(t, len(recorded), 2,
 		"expected at least 2 streamed LLM calls (root + subagent)")
 
-	workspaceTools := []string{"propose_plan", "list_templates", "read_template", "create_workspace"}
+	workspaceTools := []string{"list_templates", "read_template", "create_workspace"}
 	subagentTools := []string{"spawn_agent", "wait_agent", "message_agent", "close_agent"}
 
 	// Identify root and subagent calls. Root chat calls include
@@ -315,6 +315,10 @@ func TestSubagentChatExcludesWorkspaceProvisioningTools(t *testing.T) {
 		require.Contains(t, rootCalls[0], tool,
 			"root chat should have subagent tool %q", tool)
 	}
+
+	// Standard turns (no turn mode) should hide propose_plan.
+	require.NotContains(t, rootCalls[0], "propose_plan",
+		"standard-turn root chat should NOT have propose_plan")
 
 	// Subagent calls must NOT include workspace or subagent tools.
 	for _, tool := range workspaceTools {
