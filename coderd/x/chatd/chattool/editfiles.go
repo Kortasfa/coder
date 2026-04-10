@@ -2,6 +2,7 @@ package chattool
 
 import (
 	"context"
+	"strings"
 
 	"charm.land/fantasy"
 
@@ -10,6 +11,7 @@ import (
 
 type EditFilesOptions struct {
 	GetWorkspaceConn func(context.Context) (workspacesdk.AgentConn, error)
+	IsPlanTurn       bool
 }
 
 type EditFilesArgs struct {
@@ -22,6 +24,14 @@ func EditFiles(options EditFilesOptions) fantasy.AgentTool {
 		"Perform search-and-replace edits on one or more files in the workspace."+
 			" Each file can have multiple edits applied atomically.",
 		func(ctx context.Context, args EditFilesArgs, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			if options.IsPlanTurn {
+				for i := range args.Files {
+					args.Files[i].Path = strings.TrimSpace(args.Files[i].Path)
+					if args.Files[i].Path != canonicalPlanPath {
+						return fantasy.NewTextErrorResponse("during plan turns, edit_files is restricted to /home/coder/PLAN.md"), nil
+					}
+				}
+			}
 			if options.GetWorkspaceConn == nil {
 				return fantasy.NewTextErrorResponse("workspace connection resolver is not configured"), nil
 			}

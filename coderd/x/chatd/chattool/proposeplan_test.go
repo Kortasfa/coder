@@ -65,6 +65,100 @@ func TestProposePlan(t *testing.T) {
 		assert.Contains(t, resp.Content, "path is required")
 	})
 
+	t.Run("PlanTurnDefaultsEmptyPathToCanonicalPath", func(t *testing.T) {
+		t.Parallel()
+		ctrl := gomock.NewController(t)
+		mockConn := agentconnmock.NewMockAgentConn(ctrl)
+
+		mockConn.EXPECT().
+			ReadFile(gomock.Any(), "/home/coder/PLAN.md", int64(0), int64(32*1024+1)).
+			Return(io.NopCloser(strings.NewReader("# Plan")), "text/markdown", nil)
+
+		storeFile, _ := fakeStoreFile(t)
+		tool := newPlanTurnProposePlanTool(t, mockConn, storeFile)
+		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+			ID:    "call-1",
+			Name:  "propose_plan",
+			Input: `{"path":""}`,
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.IsError)
+
+		result := decodeProposePlanResponse(t, resp)
+		assert.Equal(t, "/home/coder/PLAN.md", result.Path)
+	})
+
+	t.Run("PlanTurnAllowsCanonicalPath", func(t *testing.T) {
+		t.Parallel()
+		ctrl := gomock.NewController(t)
+		mockConn := agentconnmock.NewMockAgentConn(ctrl)
+
+		mockConn.EXPECT().
+			ReadFile(gomock.Any(), "/home/coder/PLAN.md", int64(0), int64(32*1024+1)).
+			Return(io.NopCloser(strings.NewReader("# Plan")), "text/markdown", nil)
+
+		storeFile, _ := fakeStoreFile(t)
+		tool := newPlanTurnProposePlanTool(t, mockConn, storeFile)
+		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+			ID:    "call-1",
+			Name:  "propose_plan",
+			Input: `{"path":"/home/coder/PLAN.md"}`,
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.IsError)
+	})
+
+	t.Run("PlanTurnRejectsNonCanonicalPath", func(t *testing.T) {
+		t.Parallel()
+		ctrl := gomock.NewController(t)
+		mockConn := agentconnmock.NewMockAgentConn(ctrl)
+
+		getWorkspaceConnCalled := false
+		storeFile, _ := fakeStoreFile(t)
+		tool := chattool.ProposePlan(chattool.ProposePlanOptions{
+			GetWorkspaceConn: func(context.Context) (workspacesdk.AgentConn, error) {
+				getWorkspaceConnCalled = true
+				return mockConn, nil
+			},
+			StoreFile:  storeFile,
+			IsPlanTurn: true,
+		})
+
+		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+			ID:    "call-1",
+			Name:  "propose_plan",
+			Input: `{"path":"/home/coder/other.md"}`,
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.IsError)
+		assert.Contains(t, resp.Content, "during plan turns, propose_plan path must be /home/coder/PLAN.md")
+		assert.False(t, getWorkspaceConnCalled)
+	})
+
+	t.Run("NonPlanTurnStillRequiresPath", func(t *testing.T) {
+		t.Parallel()
+		ctrl := gomock.NewController(t)
+		mockConn := agentconnmock.NewMockAgentConn(ctrl)
+
+		storeFile, _ := fakeStoreFile(t)
+		tool := chattool.ProposePlan(chattool.ProposePlanOptions{
+			GetWorkspaceConn: func(context.Context) (workspacesdk.AgentConn, error) {
+				return mockConn, nil
+			},
+			StoreFile:  storeFile,
+			IsPlanTurn: false,
+		})
+
+		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
+			ID:    "call-1",
+			Name:  "propose_plan",
+			Input: `{"path":""}`,
+		})
+		require.NoError(t, err)
+		assert.True(t, resp.IsError)
+		assert.Contains(t, resp.Content, "path is required")
+	})
+
 	t.Run("NonMdPathReturnsError", func(t *testing.T) {
 		t.Parallel()
 		ctrl := gomock.NewController(t)
@@ -285,6 +379,21 @@ func newProposePlanTool(
 			return mockConn, nil
 		},
 		StoreFile: storeFile,
+	})
+}
+
+func newPlanTurnProposePlanTool(
+	t *testing.T,
+	mockConn *agentconnmock.MockAgentConn,
+	storeFile func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error),
+) fantasy.AgentTool {
+	t.Helper()
+	return chattool.ProposePlan(chattool.ProposePlanOptions{
+		GetWorkspaceConn: func(_ context.Context) (workspacesdk.AgentConn, error) {
+			return mockConn, nil
+		},
+		StoreFile:  storeFile,
+		IsPlanTurn: true,
 	})
 }
 

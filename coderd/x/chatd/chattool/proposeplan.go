@@ -12,12 +12,16 @@ import (
 	"github.com/coder/coder/v2/codersdk/workspacesdk"
 )
 
-const maxProposePlanSize = 32 * 1024 // 32 KiB
+const (
+	canonicalPlanPath  = "/home/coder/PLAN.md"
+	maxProposePlanSize = 32 * 1024 // 32 KiB
+)
 
 // ProposePlanOptions configures the propose_plan tool.
 type ProposePlanOptions struct {
 	GetWorkspaceConn func(context.Context) (workspacesdk.AgentConn, error)
 	StoreFile        func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error)
+	IsPlanTurn       bool
 }
 
 // ProposePlanArgs are the arguments for the propose_plan tool.
@@ -34,6 +38,17 @@ func ProposePlan(options ProposePlanOptions) fantasy.AgentTool {
 			"The file must already exist with a .md extension — use write_file to create it or edit_files to refine it before calling this tool. "+
 			"Pass the absolute file path (e.g. /home/coder/PLAN.md). The tool reads the content from the workspace.",
 		func(ctx context.Context, args ProposePlanArgs, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			if options.IsPlanTurn {
+				path := strings.TrimSpace(args.Path)
+				switch {
+				case path == "":
+					args.Path = canonicalPlanPath
+				case path != canonicalPlanPath:
+					return fantasy.NewTextErrorResponse("during plan turns, propose_plan path must be /home/coder/PLAN.md"), nil
+				default:
+					args.Path = path
+				}
+			}
 			if options.GetWorkspaceConn == nil {
 				return fantasy.NewTextErrorResponse("workspace connection resolver is not configured"), nil
 			}
