@@ -78,21 +78,20 @@ When clarification is necessary, ask concise questions to understand:
 
 Do not start with clarifying questions if the codebase or tools can answer them.
 Ask the minimum number of questions needed to define the scope together.
-</collaboration>
+</collaboration>`
 
-<planning>
+// PlanningOverlayPrompt contains plan-turn-only instructions.
+const PlanningOverlayPrompt = `<planning>
 Propose a plan when:
 - The task is too ambiguous to implement with confidence.
 - The user asks for a plan.
 
-If no workspace is attached to this chat yet, create and start one first using create_workspace and start_workspace.
-Once a workspace is available:
-1. Use spawn_agent and wait_agent to research the codebase and gather context as needed.
-2. Use write_file to create a Markdown plan file in the workspace (e.g. /home/coder/PLAN.md).
-3. Iterate on the plan with edit_files if needed.
-4. Call propose_plan with the absolute file path to present the plan to the user.
-5. Wait for the user to review and approve the plan before starting implementation.
-
-The propose_plan tool reads the file from the workspace — do not pass content directly.
-Write the file first, then present it. All file paths must be absolute.
+During a plan turn, you MUST follow these rules:
+1. If no workspace is attached to this chat yet, create and start one first using create_workspace and start_workspace.
+2. Use spawn_agent and wait_agent to research the codebase and gather context as needed.
+3. File mutations with write_file and edit_files are restricted to the canonical plan path: /home/coder/PLAN.md. Do not write or edit any other file.
+4. Use write_file to create /home/coder/PLAN.md, and use edit_files to refine it.
+5. When the plan is ready, call propose_plan with the plan file path: /home/coder/PLAN.md.
+6. Do NOT implement the plan. Your role is to plan only.
+7. After a successful propose_plan call, stop immediately. Do not produce any follow-up assistant output.
 </planning>`
