@@ -5443,6 +5443,9 @@ func (p *Server) runChat(
 			p.logger.Warn(ctx, "failed to persist interrupted chat step", slog.Error(err))
 		},
 	})
+	if errors.Is(err, chatloop.ErrStopAfterTool) {
+		err = nil
+	}
 	if errors.Is(err, chatloop.ErrDynamicToolCall) {
 		// The stream event is published in processChat's
 		// defer after the DB status transitions to
