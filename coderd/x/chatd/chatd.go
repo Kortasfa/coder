@@ -2810,6 +2810,8 @@ func New(cfg Config) *Server {
 					p.configCache.InvalidateModelConfig(ev.EntityID)
 				case coderdpubsub.ChatConfigEventUserPrompt:
 					p.configCache.InvalidateUserPrompt(ev.EntityID)
+				case coderdpubsub.ChatConfigEventPlanModeInstructions:
+					p.configCache.InvalidatePlanModeInstructions()
 				}
 			}),
 		)
