@@ -2811,8 +2811,6 @@ func New(cfg Config) *Server {
 					p.configCache.InvalidateModelConfig(ev.EntityID)
 				case coderdpubsub.ChatConfigEventUserPrompt:
 					p.configCache.InvalidateUserPrompt(ev.EntityID)
-				case coderdpubsub.ChatConfigEventPlanModeInstructions:
-					p.configCache.InvalidatePlanModeInstructions()
 				}
 			}),
 		)
@@ -4374,19 +4372,8 @@ type runChatResult struct {
 	PendingDynamicToolCalls []chatloop.PendingToolCall
 }
 
-// turnPolicy captures the resolved behavior for the current turn.
-type turnPolicy struct {
-	isPlan bool
-}
-
-// resolveTurnPolicy maps a nullable turn mode to a concrete policy.
-func resolveTurnPolicy(mode database.NullChatTurnMode) turnPolicy {
-	return turnPolicy{
-		isPlan: mode.Valid && mode.ChatTurnMode == database.ChatTurnModePlan,
-	}
-}
-
-func (tp turnPolicy) allowedTools(allTools []fantasy.AgentTool) []string {
+func allowedTurnToolNames(allTools []fantasy.AgentTool, mode database.NullChatTurnMode) []string {
+	isPlanTurn := mode.Valid && mode.ChatTurnMode == database.ChatTurnModePlan
 	knownBuiltIns := map[string]bool{
 		"read_file":                true,
 		"write_file":               true,
@@ -4408,7 +4395,7 @@ func (tp turnPolicy) allowedTools(allTools []fantasy.AgentTool) []string {
 		"read_skill":               true,
 		"read_skill_file":          true,
 	}
-	if !tp.isPlan {
+	if !isPlanTurn {
 		toolNames := make([]string, 0, len(allTools))
 		for _, tool := range allTools {
 			name := tool.Info().Name
@@ -4444,8 +4431,8 @@ func (tp turnPolicy) allowedTools(allTools []fantasy.AgentTool) []string {
 	return toolNames
 }
 
-func (tp turnPolicy) stopAfterTools() map[string]struct{} {
-	if !tp.isPlan {
+func stopAfterTurnTools(mode database.NullChatTurnMode) map[string]struct{} {
+	if !mode.Valid || mode.ChatTurnMode != database.ChatTurnModePlan {
 		return nil
 	}
 	return map[string]struct{}{"propose_plan": {}}
@@ -4461,7 +4448,7 @@ func buildSystemPrompt(
 	skills []chattool.SkillMeta,
 	userPrompt string,
 	planModeInstructions string,
-	tp turnPolicy,
+	mode database.NullChatTurnMode,
 ) []fantasy.Message {
 	if subagentInstruction != "" {
 		prompt = chatprompt.InsertSystem(prompt, subagentInstruction)
@@ -4475,7 +4462,8 @@ func buildSystemPrompt(
 	if userPrompt != "" {
 		prompt = chatprompt.InsertSystem(prompt, userPrompt)
 	}
-	if tp.isPlan {
+	isPlanTurn := mode.Valid && mode.ChatTurnMode == database.ChatTurnModePlan
+	if isPlanTurn {
 		prompt = chatprompt.InsertSystem(prompt, PlanningOverlayPrompt)
 		if planModeInstructions != "" {
 			prompt = chatprompt.InsertSystem(prompt, planModeInstructions)
@@ -4574,10 +4562,16 @@ func (p *Server) runChat(
 			break
 		}
 	}
-	tp := resolveTurnPolicy(currentTurnMode)
+	isPlanTurn := currentTurnMode.Valid && currentTurnMode.ChatTurnMode == database.ChatTurnModePlan
 	var planModeInstructions string
-	if currentTurnMode.Valid && currentTurnMode.ChatTurnMode == database.ChatTurnModePlan {
-		planModeInstructions, _ = p.configCache.PlanModeInstructions(ctx)
+	if isPlanTurn {
+		fetched, err := p.db.GetChatPlanModeInstructions(ctx)
+		switch {
+		case err == nil:
+			planModeInstructions = fetched
+		case errors.Is(err, sql.ErrNoRows):
+			planModeInstructions = ""
+		}
 	}
 
 	chainInfo := resolveChainMode(messages)
@@ -4815,7 +4809,7 @@ func (p *Server) runChat(
 		skills,
 		resolvedUserPrompt,
 		planModeInstructions,
-		tp,
+		currentTurnMode,
 	)
 	if mcpCleanup != nil {
 		defer mcpCleanup()
@@ -5136,11 +5130,11 @@ func (p *Server) runChat(
 		}),
 		chattool.WriteFile(chattool.WriteFileOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
-			IsPlanTurn:       tp.isPlan,
+			IsPlanTurn:       isPlanTurn,
 		}),
 		chattool.EditFiles(chattool.EditFilesOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
-			IsPlanTurn:       tp.isPlan,
+			IsPlanTurn:       isPlanTurn,
 		}),
 		chattool.Execute(chattool.ExecuteOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
@@ -5207,7 +5201,7 @@ func (p *Server) runChat(
 		// Plan presentation tool.
 		tools = append(tools, chattool.ProposePlan(chattool.ProposePlanOptions{
 			GetWorkspaceConn: workspaceCtx.getWorkspaceConn,
-			IsPlanTurn:       tp.isPlan,
+			IsPlanTurn:       isPlanTurn,
 			StoreFile: func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error) {
 				workspaceCtx.chatStateMu.Lock()
 				chatSnapshot := *workspaceCtx.currentChat
@@ -5337,7 +5331,7 @@ func (p *Server) runChat(
 			),
 		})
 	}
-	if tp.isPlan {
+	if isPlanTurn {
 		var filteredProviderTools []chatloop.ProviderTool
 		for _, providerTool := range providerTools {
 			if providerTool.Runner != nil {
@@ -5372,8 +5366,8 @@ func (p *Server) runChat(
 		Model:          model,
 		Messages:       prompt,
 		Tools:          tools,
-		ActiveTools:    tp.allowedTools(tools),
-		StopAfterTools: tp.stopAfterTools(),
+		ActiveTools:    allowedTurnToolNames(tools, currentTurnMode),
+		StopAfterTools: stopAfterTurnTools(currentTurnMode),
 		MaxSteps:       maxChatSteps,
 
 		ModelConfig:     callConfig,
@@ -5415,7 +5409,7 @@ func (p *Server) runChat(
 				skills,
 				reloadUserPrompt,
 				planModeInstructions,
-				tp,
+				currentTurnMode,
 			)
 			if chainModeActive {
 				reloadedPrompt = filterPromptForChainMode(

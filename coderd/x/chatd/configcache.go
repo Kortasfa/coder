@@ -82,13 +82,6 @@ type chatConfigCache struct {
 	userPromptEpoch   uint64
 	userPrompts       *tlru.Cache[uuid.UUID, string]
 	userPromptFetches singleflight.Group[string, string]
-
-	// Plan-mode instructions (deployment-scoped).
-	planModeInstructionsMu        sync.Mutex
-	planModeInstructions          string
-	planModeInstructionsExpiresAt time.Time
-	planModeInstructionsGen       uint64
-	planModeInstructionsSF        singleflight.Group[string, string]
 }
 
 func newChatConfigCache(ctx context.Context, db database.Store, clock quartz.Clock) *chatConfigCache {
@@ -416,80 +409,4 @@ func (c *chatConfigCache) InvalidateUserPrompt(userID uuid.UUID) {
 	c.userPrompts.Delete(userID)
 	c.userPromptEpoch++
 	c.mu.Unlock()
-}
-
-func (c *chatConfigCache) PlanModeInstructions(ctx context.Context) (string, error) {
-	if instructions, ok := c.cachedPlanModeInstructions(); ok {
-		return instructions, nil
-	}
-
-	generation := c.currentPlanModeInstructionsGeneration()
-	instructions, err := singleflightDoChan(
-		ctx,
-		&c.planModeInstructionsSF,
-		fmt.Sprintf("%d:plan-mode-instructions", generation),
-		func() (string, error) {
-			if cached, ok := c.cachedPlanModeInstructions(); ok {
-				return cached, nil
-			}
-
-			fetched, err := c.db.GetChatPlanModeInstructions(c.ctx)
-			if err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					c.storePlanModeInstructions(generation, "")
-					return "", nil
-				}
-				return "", err
-			}
-			c.storePlanModeInstructions(generation, fetched)
-			return fetched, nil
-		},
-	)
-	if err != nil {
-		return "", err
-	}
-
-	return instructions, nil
-}
-
-func (c *chatConfigCache) cachedPlanModeInstructions() (string, bool) {
-	c.planModeInstructionsMu.Lock()
-	defer c.planModeInstructionsMu.Unlock()
-
-	if c.planModeInstructionsExpiresAt.IsZero() {
-		return "", false
-	}
-	if c.clock.Now().Before(c.planModeInstructionsExpiresAt) {
-		return c.planModeInstructions, true
-	}
-
-	c.planModeInstructions = ""
-	c.planModeInstructionsExpiresAt = time.Time{}
-	return "", false
-}
-
-func (c *chatConfigCache) currentPlanModeInstructionsGeneration() uint64 {
-	c.planModeInstructionsMu.Lock()
-	defer c.planModeInstructionsMu.Unlock()
-	return c.planModeInstructionsGen
-}
-
-func (c *chatConfigCache) storePlanModeInstructions(generation uint64, instructions string) {
-	c.planModeInstructionsMu.Lock()
-	defer c.planModeInstructionsMu.Unlock()
-
-	if c.planModeInstructionsGen != generation {
-		return
-	}
-
-	c.planModeInstructions = instructions
-	c.planModeInstructionsExpiresAt = c.clock.Now().Add(chatConfigUserPromptTTL)
-}
-
-func (c *chatConfigCache) InvalidatePlanModeInstructions() {
-	c.planModeInstructionsMu.Lock()
-	c.planModeInstructions = ""
-	c.planModeInstructionsExpiresAt = time.Time{}
-	c.planModeInstructionsGen++
-	c.planModeInstructionsMu.Unlock()
 }

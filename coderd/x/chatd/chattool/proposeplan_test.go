@@ -37,7 +37,7 @@ func TestProposePlan(t *testing.T) {
 		mockConn := agentconnmock.NewMockAgentConn(ctrl)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -54,7 +54,7 @@ func TestProposePlan(t *testing.T) {
 		mockConn := agentconnmock.NewMockAgentConn(ctrl)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -75,7 +75,7 @@ func TestProposePlan(t *testing.T) {
 			Return(io.NopCloser(strings.NewReader("# Plan")), "text/markdown", nil)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newPlanTurnProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, true)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -98,7 +98,7 @@ func TestProposePlan(t *testing.T) {
 			Return(io.NopCloser(strings.NewReader("# Plan")), "text/markdown", nil)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newPlanTurnProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, true)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -110,29 +110,20 @@ func TestProposePlan(t *testing.T) {
 
 	t.Run("PlanTurnRejectsNonCanonicalPath", func(t *testing.T) {
 		t.Parallel()
-		ctrl := gomock.NewController(t)
-		mockConn := agentconnmock.NewMockAgentConn(ctrl)
 
-		getWorkspaceConnCalled := false
 		storeFile, _ := fakeStoreFile(t)
-		tool := chattool.ProposePlan(chattool.ProposePlanOptions{
-			GetWorkspaceConn: func(context.Context) (workspacesdk.AgentConn, error) {
-				getWorkspaceConnCalled = true
-				return mockConn, nil
+		assertPlanTurnPathRejected(
+			t,
+			func(getWorkspaceConn func(context.Context) (workspacesdk.AgentConn, error), isPlanTurn bool) fantasy.AgentTool {
+				return chattool.ProposePlan(chattool.ProposePlanOptions{
+					GetWorkspaceConn: getWorkspaceConn,
+					StoreFile:        storeFile,
+					IsPlanTurn:       isPlanTurn,
+				})
 			},
-			StoreFile:  storeFile,
-			IsPlanTurn: true,
-		})
-
-		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
-			ID:    "call-1",
-			Name:  "propose_plan",
-			Input: `{"path":"/home/coder/other.md"}`,
-		})
-		require.NoError(t, err)
-		assert.True(t, resp.IsError)
-		assert.Contains(t, resp.Content, "during plan turns, propose_plan path must be /home/coder/PLAN.md")
-		assert.False(t, getWorkspaceConnCalled)
+			`{"path":"/home/coder/other.md"}`,
+			"during plan turns, propose_plan path must be /home/coder/PLAN.md",
+		)
 	})
 
 	t.Run("NonPlanTurnStillRequiresPath", func(t *testing.T) {
@@ -141,13 +132,7 @@ func TestProposePlan(t *testing.T) {
 		mockConn := agentconnmock.NewMockAgentConn(ctrl)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := chattool.ProposePlan(chattool.ProposePlanOptions{
-			GetWorkspaceConn: func(context.Context) (workspacesdk.AgentConn, error) {
-				return mockConn, nil
-			},
-			StoreFile:  storeFile,
-			IsPlanTurn: false,
-		})
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
@@ -165,7 +150,7 @@ func TestProposePlan(t *testing.T) {
 		mockConn := agentconnmock.NewMockAgentConn(ctrl)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -187,7 +172,7 @@ func TestProposePlan(t *testing.T) {
 			Return(io.NopCloser(strings.NewReader(largeContent)), "text/markdown", nil)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -209,7 +194,7 @@ func TestProposePlan(t *testing.T) {
 			Return(io.NopCloser(strings.NewReader(content)), "text/markdown", nil)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -229,7 +214,7 @@ func TestProposePlan(t *testing.T) {
 			Return(io.NopCloser(strings.NewReader("# Plan\n\nContent")), "text/markdown", nil)
 
 		storeFile, stored := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -258,7 +243,7 @@ func TestProposePlan(t *testing.T) {
 			Return(nil, "", xerrors.New("file not found"))
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -279,7 +264,7 @@ func TestProposePlan(t *testing.T) {
 			Return(io.NopCloser(iotest.ErrReader(xerrors.New("connection reset"))), "text/markdown", nil)
 
 		storeFile, _ := fakeStoreFile(t)
-		tool := newProposePlanTool(t, mockConn, storeFile)
+		tool := newProposePlanTool(t, mockConn, storeFile, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -301,7 +286,7 @@ func TestProposePlan(t *testing.T) {
 
 		tool := newProposePlanTool(t, mockConn, func(_ context.Context, _ string, _ string, _ []byte) (uuid.UUID, error) {
 			return uuid.Nil, xerrors.New("storage unavailable")
-		})
+		}, false)
 		resp, err := tool.Run(context.Background(), fantasy.ToolCall{
 			ID:    "call-1",
 			Name:  "propose_plan",
@@ -372,20 +357,7 @@ func newProposePlanTool(
 	t *testing.T,
 	mockConn *agentconnmock.MockAgentConn,
 	storeFile func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error),
-) fantasy.AgentTool {
-	t.Helper()
-	return chattool.ProposePlan(chattool.ProposePlanOptions{
-		GetWorkspaceConn: func(_ context.Context) (workspacesdk.AgentConn, error) {
-			return mockConn, nil
-		},
-		StoreFile: storeFile,
-	})
-}
-
-func newPlanTurnProposePlanTool(
-	t *testing.T,
-	mockConn *agentconnmock.MockAgentConn,
-	storeFile func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error),
+	isPlanTurn bool,
 ) fantasy.AgentTool {
 	t.Helper()
 	return chattool.ProposePlan(chattool.ProposePlanOptions{
@@ -393,7 +365,7 @@ func newPlanTurnProposePlanTool(
 			return mockConn, nil
 		},
 		StoreFile:  storeFile,
-		IsPlanTurn: true,
+		IsPlanTurn: isPlanTurn,
 	})
 }
 

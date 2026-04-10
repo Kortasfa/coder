@@ -3297,7 +3297,6 @@ func (api *API) putChatPlanModeInstructions(rw http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	publishChatConfigEvent(api.Logger, api.Pubsub, pubsub.ChatConfigEventPlanModeInstructions, uuid.Nil)
 	rw.WriteHeader(http.StatusNoContent)
 }
 

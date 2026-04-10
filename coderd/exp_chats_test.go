@@ -203,6 +203,56 @@ func insertAssistantCostMessage(
 	require.NoError(t, err)
 }
 
+func runTurnModeValidationTests(
+	t *testing.T,
+	request func(ctx context.Context, t *testing.T, client *codersdk.ExperimentalClient, turnMode string) error,
+) {
+	t.Helper()
+
+	tests := []struct {
+		name           string
+		turnMode       string
+		wantStatusCode int
+		wantMessage    string
+	}{
+		{
+			name:           "InvalidTurnMode",
+			turnMode:       "invalid_mode",
+			wantStatusCode: http.StatusBadRequest,
+			wantMessage:    "Invalid turn_mode value.",
+		},
+		{
+			name:     "ValidTurnModePlan",
+			turnMode: string(codersdk.ChatTurnModePlan),
+		},
+		{
+			name:     "EmptyTurnMode",
+			turnMode: "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := testutil.Context(t, testutil.WaitLong)
+			client := newChatClient(t)
+			_ = coderdtest.CreateFirstUser(t, client.Client)
+			_ = createChatModelConfig(t, client)
+
+			err := request(ctx, t, client, tt.turnMode)
+			if tt.wantStatusCode == 0 {
+				require.NoError(t, err)
+				return
+			}
+
+			sdkErr := requireSDKError(t, err, tt.wantStatusCode)
+			require.Equal(t, tt.wantMessage, sdkErr.Message)
+		})
+	}
+}
+
 func TestPostChats(t *testing.T) {
 	t.Parallel()
 
@@ -651,61 +701,15 @@ func TestPostChats(t *testing.T) {
 		requireChatUsageLimitExceededError(t, err, 100, 100, wantResetsAt)
 	})
 
-
-	t.Run("InvalidTurnMode", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
+	runTurnModeValidationTests(t, func(ctx context.Context, t *testing.T, client *codersdk.ExperimentalClient, turnMode string) error {
 		_, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
 			Content: []codersdk.ChatInputPart{{
 				Type: codersdk.ChatInputPartTypeText,
 				Text: "some text",
 			}},
-			TurnMode: "invalid_mode",
+			TurnMode: codersdk.ChatTurnMode(turnMode),
 		})
-		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
-		require.Equal(t, "Invalid turn_mode value.", sdkErr.Message)
-	})
-
-	t.Run("ValidTurnModePlan", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		chat, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "some text",
-			}},
-			TurnMode: codersdk.ChatTurnModePlan,
-		})
-		require.NoError(t, err)
-		require.NotEqual(t, uuid.Nil, chat.ID)
-	})
-
-	t.Run("EmptyTurnMode", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		_, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "some text",
-			}},
-			TurnMode: "",
-		})
-		require.NoError(t, err)
+		return err
 	})
 
 	t.Run("NilOrganizationID", func(t *testing.T) {
@@ -4398,14 +4402,7 @@ func TestPostChatMessages(t *testing.T) {
 		requireSDKError(t, err, http.StatusNotFound)
 	})
 
-	t.Run("InvalidTurnMode", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
+	runTurnModeValidationTests(t, func(ctx context.Context, t *testing.T, client *codersdk.ExperimentalClient, turnMode string) error {
 		chat, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
 			Content: []codersdk.ChatInputPart{{
 				Type: codersdk.ChatInputPartTypeText,
@@ -4419,62 +4416,9 @@ func TestPostChatMessages(t *testing.T) {
 				Type: codersdk.ChatInputPartTypeText,
 				Text: "some text",
 			}},
-			TurnMode: "invalid_mode",
+			TurnMode: codersdk.ChatTurnMode(turnMode),
 		})
-		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
-		require.Equal(t, "Invalid turn_mode value.", sdkErr.Message)
-	})
-
-	t.Run("ValidTurnModePlan", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		chat, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "initial message for turn mode validation",
-			}},
-		})
-		require.NoError(t, err)
-
-		_, err = client.CreateChatMessage(ctx, chat.ID, codersdk.CreateChatMessageRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "some text",
-			}},
-			TurnMode: codersdk.ChatTurnModePlan,
-		})
-		require.NoError(t, err)
-	})
-
-	t.Run("EmptyTurnMode", func(t *testing.T) {
-		t.Parallel()
-
-		ctx := testutil.Context(t, testutil.WaitLong)
-		client := newChatClient(t)
-		_ = coderdtest.CreateFirstUser(t, client.Client)
-		_ = createChatModelConfig(t, client)
-
-		chat, err := client.CreateChat(ctx, codersdk.CreateChatRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "initial message for turn mode validation",
-			}},
-		})
-		require.NoError(t, err)
-
-		_, err = client.CreateChatMessage(ctx, chat.ID, codersdk.CreateChatMessageRequest{
-			Content: []codersdk.ChatInputPart{{
-				Type: codersdk.ChatInputPartTypeText,
-				Text: "some text",
-			}},
-			TurnMode: "",
-		})
-		require.NoError(t, err)
+		return err
 	})
 }
 
@@ -8160,36 +8104,49 @@ func TestChatPlanModeInstructions(t *testing.T) {
 		return resp
 	}
 
-	t.Run("DefaultGETReturnsEmpty", func(t *testing.T) {
-		ctx := testutil.Context(t, testutil.WaitLong)
+	roundTripTests := []struct {
+		name    string
+		updates []string
+		want    string
+	}{
+		{
+			name: "DefaultGETReturnsEmpty",
+			want: "",
+		},
+		{
+			name:    "PUTThenGETRoundTrips",
+			updates: []string{"Use plan mode for multi-step changes."},
+			want:    "Use plan mode for multi-step changes.",
+		},
+		{
+			name:    "InvisibleUnicodeIsStripped",
+			updates: []string{"plan\u200b mode\u200d instructions\uFEFF"},
+			want:    "plan mode instructions",
+		},
+		{
+			name: "ClearWithEmptyString",
+			updates: []string{
+				"Temporary instructions before clear.",
+				"",
+			},
+			want: "",
+		},
+	}
+	for _, tt := range roundTripTests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := testutil.Context(t, testutil.WaitLong)
 
-		resp := getChatPlanModeInstructions(t, ctx)
-		require.Equal(t, "", resp.PlanModeInstructions)
-	})
+			for _, instructions := range tt.updates {
+				updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
+					PlanModeInstructions: instructions,
+				})
+			}
 
-	t.Run("PUTThenGETRoundTrips", func(t *testing.T) {
-		ctx := testutil.Context(t, testutil.WaitLong)
-		const instructions = "Use plan mode for multi-step changes."
-
-		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
-			PlanModeInstructions: instructions,
+			resp := getChatPlanModeInstructions(t, ctx)
+			require.Equal(t, tt.want, resp.PlanModeInstructions)
 		})
-
-		resp := getChatPlanModeInstructions(t, ctx)
-		require.Equal(t, instructions, resp.PlanModeInstructions)
-	})
-
-	t.Run("InvisibleUnicodeIsStripped", func(t *testing.T) {
-		ctx := testutil.Context(t, testutil.WaitLong)
-		const rawInstructions = "plan\u200b mode\u200d instructions\uFEFF"
-
-		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
-			PlanModeInstructions: rawInstructions,
-		})
-
-		resp := getChatPlanModeInstructions(t, ctx)
-		require.Equal(t, "plan mode instructions", resp.PlanModeInstructions)
-	})
+	}
 
 	t.Run("OversizedPayloadReturns400", func(t *testing.T) {
 		ctx := testutil.Context(t, testutil.WaitLong)
@@ -8216,23 +8173,6 @@ func TestChatPlanModeInstructions(t *testing.T) {
 			PlanModeInstructions: "This should fail.",
 		})
 		requireSDKError(t, err, http.StatusForbidden)
-	})
-
-	t.Run("ClearWithEmptyString", func(t *testing.T) {
-		ctx := testutil.Context(t, testutil.WaitLong)
-		const instructions = "Temporary instructions before clear."
-
-		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
-			PlanModeInstructions: instructions,
-		})
-		resp := getChatPlanModeInstructions(t, ctx)
-		require.Equal(t, instructions, resp.PlanModeInstructions)
-
-		updateChatPlanModeInstructions(t, ctx, codersdk.UpdateChatPlanModeInstructionsRequest{
-			PlanModeInstructions: "",
-		})
-		resp = getChatPlanModeInstructions(t, ctx)
-		require.Equal(t, "", resp.PlanModeInstructions)
 	})
 }
 

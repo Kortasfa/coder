@@ -9,8 +9,8 @@ import (
 )
 
 // ChatConfigEventChannel is the pubsub channel for chat config
-// changes (providers, model configs, user prompts, and plan-mode
-// instructions). All replicas subscribe to this channel to invalidate
+// changes (providers, model configs, and user prompts). All replicas
+// subscribe to this channel to invalidate
 // their local caches.
 const ChatConfigEventChannel = "chat:config_change"
 
@@ -33,8 +33,8 @@ func HandleChatConfigEvent(cb func(ctx context.Context, payload ChatConfigEvent,
 }
 
 // ChatConfigEvent is published when chat configuration changes
-// (provider CRUD, model config CRUD, user prompt updates, or
-// plan-mode instruction updates). Subscribers use this to invalidate
+// (provider CRUD, model config CRUD, or user prompt updates).
+// Subscribers use this to invalidate
 // their local caches.
 type ChatConfigEvent struct {
 	Kind ChatConfigEventKind `json:"kind"`
@@ -42,15 +42,13 @@ type ChatConfigEvent struct {
 	//   - For providers: uuid.Nil (all providers are invalidated).
 	//   - For model configs: the specific config ID.
 	//   - For user prompts: the user ID.
-	//   - For plan-mode instructions: uuid.Nil (deployment-scoped).
 	EntityID uuid.UUID `json:"entity_id"`
 }
 
 type ChatConfigEventKind string
 
 const (
-	ChatConfigEventProviders            ChatConfigEventKind = "providers"
-	ChatConfigEventModelConfig          ChatConfigEventKind = "model_config"
-	ChatConfigEventUserPrompt           ChatConfigEventKind = "user_prompt"
-	ChatConfigEventPlanModeInstructions ChatConfigEventKind = "plan_mode_instructions"
+	ChatConfigEventProviders   ChatConfigEventKind = "providers"
+	ChatConfigEventModelConfig ChatConfigEventKind = "model_config"
+	ChatConfigEventUserPrompt  ChatConfigEventKind = "user_prompt"
 )
