@@ -55,8 +55,11 @@ import (
 )
 
 type recordedOpenAIRequest struct {
-	Messages []chattest.OpenAIMessage
-	Tools    []string
+	Messages           []chattest.OpenAIMessage
+	Tools              []string
+	Store              *bool
+	PreviousResponseID *string
+	ContentLength      int64
 }
 
 func recordOpenAIRequest(req *chattest.OpenAIRequest) recordedOpenAIRequest {
@@ -65,9 +68,30 @@ func recordOpenAIRequest(req *chattest.OpenAIRequest) recordedOpenAIRequest {
 	for _, tool := range req.Tools {
 		tools = append(tools, tool.Function.Name)
 	}
+
+	var store *bool
+	if req.Store != nil {
+		value := *req.Store
+		store = &value
+	}
+
+	var previousResponseID *string
+	if req.PreviousResponseID != nil {
+		value := *req.PreviousResponseID
+		previousResponseID = &value
+	}
+
+	var contentLength int64
+	if req.Request != nil {
+		contentLength = req.Request.ContentLength
+	}
+
 	return recordedOpenAIRequest{
-		Messages: messages,
-		Tools:    tools,
+		Messages:           messages,
+		Tools:              tools,
+		Store:              store,
+		PreviousResponseID: previousResponseID,
+		ContentLength:      contentLength,
 	}
 }
 
@@ -1015,6 +1039,392 @@ func TestStandardTurnHidesProposePlan(t *testing.T) {
 			require.NotContains(t, msg.Content, chatd.PlanningOverlayPrompt)
 		}
 	}
+}
+
+func TestPlanTurnPromptContract(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	db, ps := dbtestutil.NewDB(t)
+
+	var (
+		requests   []recordedOpenAIRequest
+		requestsMu sync.Mutex
+	)
+	openAIURL := chattest.NewOpenAI(t, func(req *chattest.OpenAIRequest) chattest.OpenAIResponse {
+		if !req.Stream {
+			return chattest.OpenAINonStreamingResponse("title")
+		}
+
+		requestsMu.Lock()
+		requests = append(requests, recordOpenAIRequest(req))
+		requestsMu.Unlock()
+
+		return chattest.OpenAIStreamingResponse(
+			chattest.OpenAITextChunks("plan acknowledged")...,
+		)
+	})
+
+	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
+	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
+
+	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "plan-turn-prompt-contract",
+		ModelConfigID: model.ID,
+		TurnMode:      "plan",
+		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText("Plan the rollout."),
+		},
+	})
+	require.NoError(t, err)
+
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	requestsMu.Lock()
+	recorded := append([]recordedOpenAIRequest(nil), requests...)
+	requestsMu.Unlock()
+
+	require.Len(t, recorded, 1, "expected exactly 1 streamed model call")
+	require.True(t, requestHasSystemSubstring(recorded[0], "You are in Plan Mode."))
+	require.True(t, requestHasSystemSubstring(recorded[0], chatd.PlanningOverlayPrompt))
+	for _, msg := range recorded[0].Messages {
+		if msg.Role != "system" {
+			continue
+		}
+		sanitized := strings.ReplaceAll(msg.Content, chatd.PlanningOverlayPrompt, "")
+		require.NotContains(t, sanitized, "propose_plan")
+	}
+}
+
+func TestStandardTurnNoPlanningLeakage(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	db, ps := dbtestutil.NewDB(t)
+
+	var (
+		requests   []recordedOpenAIRequest
+		requestsMu sync.Mutex
+	)
+	openAIURL := chattest.NewOpenAI(t, func(req *chattest.OpenAIRequest) chattest.OpenAIResponse {
+		if !req.Stream {
+			return chattest.OpenAINonStreamingResponse("title")
+		}
+
+		requestsMu.Lock()
+		requests = append(requests, recordOpenAIRequest(req))
+		requestsMu.Unlock()
+
+		return chattest.OpenAIStreamingResponse(
+			chattest.OpenAITextChunks("standard response")...,
+		)
+	})
+
+	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
+	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
+
+	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "standard-turn-no-planning-leakage",
+		ModelConfigID: model.ID,
+		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText("Answer directly."),
+		},
+	})
+	require.NoError(t, err)
+
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	requestsMu.Lock()
+	recorded := append([]recordedOpenAIRequest(nil), requests...)
+	requestsMu.Unlock()
+
+	require.Len(t, recorded, 1, "expected exactly 1 streamed model call")
+	require.False(t, requestHasSystemSubstring(recorded[0], "You are in Plan Mode."))
+	require.False(t, requestHasSystemSubstring(recorded[0], chatd.PlanningOverlayPrompt))
+	for _, msg := range recorded[0].Messages {
+		if msg.Role == "system" {
+			require.NotContains(t, msg.Content, "propose_plan")
+		}
+	}
+	require.NotContains(t, recorded[0].Tools, "ask_user_question")
+}
+
+func TestPlanTurnAskUserQuestion(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	db, ps := dbtestutil.NewDB(t)
+
+	var (
+		requests   []recordedOpenAIRequest
+		requestsMu sync.Mutex
+	)
+	openAIURL := chattest.NewOpenAI(t, func(req *chattest.OpenAIRequest) chattest.OpenAIResponse {
+		if !req.Stream {
+			return chattest.OpenAINonStreamingResponse("title")
+		}
+
+		requestsMu.Lock()
+		requests = append(requests, recordOpenAIRequest(req))
+		requestsMu.Unlock()
+
+		return chattest.OpenAIStreamingResponse(
+			chattest.OpenAITextChunks("plan tools captured")...,
+		)
+	})
+
+	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
+	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
+
+	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "plan-turn-ask-user-question",
+		ModelConfigID: model.ID,
+		TurnMode:      "plan",
+		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText("Plan the next steps."),
+		},
+	})
+	require.NoError(t, err)
+
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	requestsMu.Lock()
+	recorded := append([]recordedOpenAIRequest(nil), requests...)
+	requestsMu.Unlock()
+
+	require.Len(t, recorded, 1, "expected exactly 1 streamed model call")
+	require.Contains(t, recorded[0].Tools, "ask_user_question")
+}
+
+func TestPlanTurnBlocksNonBuiltInTools(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	db, ps := dbtestutil.NewDB(t)
+
+	dynamicToolsJSON, err := json.Marshal([]mcpgo.Tool{{
+		Name:        "my_dynamic_tool",
+		Description: "A test dynamic tool.",
+		InputSchema: mcpgo.ToolInputSchema{
+			Type: "object",
+			Properties: map[string]any{
+				"input": map[string]any{"type": "string"},
+			},
+			Required: []string{"input"},
+		},
+	}})
+	require.NoError(t, err)
+
+	var (
+		requests   []recordedOpenAIRequest
+		requestsMu sync.Mutex
+	)
+	openAIURL := chattest.NewOpenAI(t, func(req *chattest.OpenAIRequest) chattest.OpenAIResponse {
+		if !req.Stream {
+			return chattest.OpenAINonStreamingResponse("title")
+		}
+
+		requestsMu.Lock()
+		requests = append(requests, recordOpenAIRequest(req))
+		requestsMu.Unlock()
+
+		return chattest.OpenAIStreamingResponse(
+			chattest.OpenAITextChunks("done")...,
+		)
+	})
+
+	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	server := newActiveTestServer(t, db, ps)
+
+	standardChat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "standard-turn-dynamic-tool",
+		ModelConfigID: model.ID,
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText("Use whatever tools are available."),
+		},
+		DynamicTools: dynamicToolsJSON,
+	})
+	require.NoError(t, err)
+	waitForChatProcessed(ctx, t, db, standardChat.ID, server)
+
+	planChat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "plan-turn-dynamic-tool-filter",
+		ModelConfigID: model.ID,
+		TurnMode:      "plan",
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText("Plan the work without using custom tools."),
+		},
+		DynamicTools: dynamicToolsJSON,
+	})
+	require.NoError(t, err)
+	waitForChatProcessed(ctx, t, db, planChat.ID, server)
+
+	requestsMu.Lock()
+	recorded := append([]recordedOpenAIRequest(nil), requests...)
+	requestsMu.Unlock()
+
+	require.Len(t, recorded, 2, "expected exactly 2 streamed model calls")
+	standardReq := recorded[0]
+	planReq := recorded[1]
+
+	require.Contains(t, standardReq.Tools, "my_dynamic_tool")
+	require.NotContains(t, planReq.Tools, "my_dynamic_tool")
+
+	planAllowlist := map[string]bool{
+		"read_file":         true,
+		"write_file":        true,
+		"edit_files":        true,
+		"list_templates":    true,
+		"read_template":     true,
+		"create_workspace":  true,
+		"start_workspace":   true,
+		"propose_plan":      true,
+		"spawn_agent":       true,
+		"wait_agent":        true,
+		"read_skill":        true,
+		"read_skill_file":   true,
+		"ask_user_question": true,
+	}
+	for _, name := range planReq.Tools {
+		require.True(t, planAllowlist[name], "unexpected plan-turn tool %q", name)
+	}
+}
+
+func TestChainModeDisabledOnModeChange(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	db, ps := dbtestutil.NewDB(t)
+
+	firstReply := strings.Repeat("assistant alpha ", 24)
+	secondReply := strings.Repeat("assistant beta ", 24)
+	thirdReply := strings.Repeat("assistant gamma ", 24)
+
+	var (
+		callCount  atomic.Int32
+		requests   []recordedOpenAIRequest
+		requestsMu sync.Mutex
+	)
+	openAIURL := chattest.NewOpenAI(t, func(req *chattest.OpenAIRequest) chattest.OpenAIResponse {
+		if !req.Stream {
+			return chattest.OpenAINonStreamingResponse("title")
+		}
+
+		requestsMu.Lock()
+		requests = append(requests, recordOpenAIRequest(req))
+		requestsMu.Unlock()
+
+		switch callCount.Add(1) {
+		case 1:
+			return chattest.OpenAIStreamingResponse(
+				chattest.OpenAITextChunks(firstReply)...,
+			)
+		case 2:
+			return chattest.OpenAIStreamingResponse(
+				chattest.OpenAITextChunks(secondReply)...,
+			)
+		default:
+			return chattest.OpenAIStreamingResponse(
+				chattest.OpenAITextChunks(thirdReply)...,
+			)
+		}
+	})
+
+	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai", openAIURL)
+
+	storeResponses := true
+	optionsJSON, err := json.Marshal(codersdk.ChatModelCallConfig{
+		ProviderOptions: &codersdk.ChatModelProviderOptions{
+			OpenAI: &codersdk.ChatModelOpenAIProviderOptions{
+				Store: &storeResponses,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	model, err = db.UpdateChatModelConfig(ctx, database.UpdateChatModelConfigParams{
+		Provider:             model.Provider,
+		Model:                model.Model,
+		DisplayName:          model.DisplayName,
+		UpdatedBy:            model.UpdatedBy,
+		Enabled:              model.Enabled,
+		IsDefault:            model.IsDefault,
+		ContextLimit:         model.ContextLimit,
+		CompressionThreshold: model.CompressionThreshold,
+		Options:              optionsJSON,
+		ID:                   model.ID,
+	})
+	require.NoError(t, err)
+
+	server := newActiveTestServer(t, db, ps)
+
+	firstPrompt := "Plan alpha: " + strings.Repeat("alpha ", 48)
+	secondPrompt := "Plan beta: " + strings.Repeat("beta ", 48)
+	thirdPrompt := "Standard gamma: " + strings.Repeat("gamma ", 48)
+
+	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
+		OwnerID:       user.ID,
+		Title:         "chain-mode-disabled-on-mode-change",
+		ModelConfigID: model.ID,
+		TurnMode:      "plan",
+		InitialUserContent: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText(firstPrompt),
+		},
+	})
+	require.NoError(t, err)
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	_, err = server.SendMessage(ctx, chatd.SendMessageOptions{
+		ChatID:    chat.ID,
+		CreatedBy: user.ID,
+		Content: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText(secondPrompt),
+		},
+		TurnMode: "plan",
+	})
+	require.NoError(t, err)
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	_, err = server.SendMessage(ctx, chatd.SendMessageOptions{
+		ChatID:    chat.ID,
+		CreatedBy: user.ID,
+		Content: []codersdk.ChatMessagePart{
+			codersdk.ChatMessageText(thirdPrompt),
+		},
+	})
+	require.NoError(t, err)
+	waitForChatProcessed(ctx, t, db, chat.ID, server)
+
+	requestsMu.Lock()
+	recorded := append([]recordedOpenAIRequest(nil), requests...)
+	requestsMu.Unlock()
+
+	require.Len(t, recorded, 3, "expected exactly 3 streamed model calls")
+
+	require.NotNil(t, recorded[0].Store)
+	require.True(t, *recorded[0].Store)
+	require.Nil(t, recorded[0].PreviousResponseID)
+
+	require.NotNil(t, recorded[1].Store)
+	require.True(t, *recorded[1].Store)
+	require.NotNil(t, recorded[1].PreviousResponseID)
+
+	require.NotNil(t, recorded[2].Store)
+	require.True(t, *recorded[2].Store)
+	require.Nil(t, recorded[2].PreviousResponseID)
+	require.Greater(t, recorded[2].ContentLength, recorded[1].ContentLength,
+		"mode change should fall back to a larger replayed request")
 }
 
 func TestSendMessageQueuesWhenWaitingWithQueuedBacklog(t *testing.T) {
