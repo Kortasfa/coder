@@ -46,6 +46,7 @@ export type CreateChatOptions = {
 	model?: string;
 	mcpServerIds?: string[];
 	organizationId: string;
+	turnMode?: TypesGen.ChatTurnMode;
 };
 
 /**
@@ -224,6 +225,7 @@ export const AgentCreateForm: FC<AgentCreateFormProps> = ({
 	const [pendingOrgChange, setPendingOrgChange] =
 		useState<TypesGen.Organization | null>(null);
 	const organizationId = selectedOrg?.id ?? "";
+	const [planModeEnabled, setPlanModeEnabled] = useState(false);
 	const hasModelOptions = modelOptions.length > 0;
 	const hasConfiguredModels = hasConfiguredModelsInCatalog(modelCatalog);
 	const hasUserFixableModelProviders = hasUserFixableProviders(modelCatalog);
@@ -310,6 +312,7 @@ export const AgentCreateForm: FC<AgentCreateFormProps> = ({
 				selectedMCPServerIdsRef.current.length > 0
 					? [...selectedMCPServerIdsRef.current]
 					: undefined,
+			turnMode: planModeEnabled ? "plan" : undefined,
 		}).catch((err) => {
 			// Re-enable draft persistence so the user can edit
 			// and retry after a failed send attempt, then rethrow
@@ -435,6 +438,8 @@ export const AgentCreateForm: FC<AgentCreateFormProps> = ({
 						modelSelectorPlaceholder={modelSelectorPlaceholder}
 						isModelCatalogLoading={isModelCatalogLoading}
 						hasModelOptions={hasModelOptions}
+						planModeEnabled={planModeEnabled}
+						onPlanModeToggle={setPlanModeEnabled}
 						attachments={attachments}
 						onAttach={handleAttach}
 						onRemoveAttachment={handleRemoveAttachment}
@@ -469,7 +474,6 @@ export const AgentCreateForm: FC<AgentCreateFormProps> = ({
 						</a>{" "}
 						to Coder Agents through September 2026
 					</p>
-				</div>
 			</div>
 			<ConfirmDialog
 				open={pendingOrgChange !== null}

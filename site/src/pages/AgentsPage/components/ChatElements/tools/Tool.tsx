@@ -72,6 +72,7 @@ interface ToolProps extends Omit<ComponentPropsWithRef<"div">, "children"> {
 	mcpServerConfigId?: string;
 	/** Available MCP server configs for icon/name lookup. */
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
+	onImplementPlan?: () => void;
 	/** Human-readable intent extracted from the model's tool-call args. */
 	modelIntent?: string;
 }
@@ -89,6 +90,7 @@ type ToolRendererProps = {
 	computerUseSubagentIds?: Set<string>;
 	showDesktopPreviews?: boolean;
 	subagentStatusOverrides?: Map<string, string>;
+	onImplementPlan?: () => void;
 	mcpServerConfigId?: string;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	modelIntent?: string;
@@ -498,6 +500,7 @@ const ProposePlanRenderer: FC<ToolRendererProps> = ({
 	status,
 	result,
 	isError,
+	onImplementPlan,
 }) => {
 	const parsedArgs = parseArgs(args);
 	const path = parsedArgs ? asString(parsedArgs.path) || "PLAN.md" : "PLAN.md";
@@ -517,6 +520,7 @@ const ProposePlanRenderer: FC<ToolRendererProps> = ({
 			status={status}
 			isError={isError}
 			errorMessage={errorMessage}
+			onImplementPlan={onImplementPlan}
 		/>
 	);
 };
@@ -780,6 +784,7 @@ export const Tool = memo(
 		subagentStatusOverrides,
 		mcpServerConfigId,
 		mcpServers,
+		onImplementPlan,
 		modelIntent,
 		ref,
 		...props
@@ -812,6 +817,7 @@ export const Tool = memo(
 					subagentStatusOverrides={subagentStatusOverrides}
 					mcpServerConfigId={mcpServerConfigId}
 					mcpServers={mcpServers}
+					onImplementPlan={onImplementPlan}
 					modelIntent={modelIntent}
 				/>
 			</div>

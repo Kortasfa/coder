@@ -253,6 +253,7 @@ export const BlockList: FC<{
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	onImageClick?: (src: string) => void;
 	onTextFileClick?: (content: string) => void;
+	onImplementPlan?: () => void;
 	urlTransform?: UrlTransform;
 }> = ({
 	blocks,
@@ -266,6 +267,7 @@ export const BlockList: FC<{
 	mcpServers,
 	onImageClick,
 	onTextFileClick,
+	onImplementPlan,
 	urlTransform,
 }) => {
 	const toolByID = new Map(tools.map((tool) => [tool.id, tool]));
@@ -369,6 +371,7 @@ export const BlockList: FC<{
 								}
 								mcpServerConfigId={tool.mcpServerConfigId}
 								mcpServers={mcpServers}
+								onImplementPlan={onImplementPlan}
 								modelIntent={tool.modelIntent}
 							/>
 						);
@@ -410,6 +413,7 @@ export const BlockList: FC<{
 					}
 					mcpServerConfigId={tool.mcpServerConfigId}
 					mcpServers={mcpServers}
+					onImplementPlan={onImplementPlan}
 					modelIntent={tool.modelIntent}
 				/>
 			))}
@@ -433,6 +437,7 @@ const ChatMessageItem = memo<{
 	// that fades text out toward the bottom. Used by the sticky
 	// overlay to indicate truncated content.
 	fadeFromBottom?: boolean;
+	onImplementPlan?: () => void;
 	urlTransform?: UrlTransform;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	subagentTitles?: Map<string, string>;
@@ -447,6 +452,7 @@ const ChatMessageItem = memo<{
 		isAfterEditingMessage = false,
 		hideActions = false,
 		fadeFromBottom = false,
+		onImplementPlan,
 
 		urlTransform,
 		mcpServers,
@@ -610,6 +616,7 @@ const ChatMessageItem = memo<{
 										subagentTitles={subagentTitles}
 										computerUseSubagentIds={computerUseSubagentIds}
 										showDesktopPreviews={showDesktopPreviews}
+										onImplementPlan={onImplementPlan}
 										onImageClick={setPreviewImage}
 										onTextFileClick={setPreviewText}
 										urlTransform={urlTransform}
@@ -986,6 +993,7 @@ interface ConversationTimelineProps {
 		fileBlocks?: readonly TypesGen.ChatMessagePart[],
 	) => void;
 	editingMessageId?: number | null;
+	onImplementPlan?: () => void;
 	urlTransform?: UrlTransform;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	computerUseSubagentIds?: Set<string>;
@@ -999,6 +1007,7 @@ export const ConversationTimeline = memo<ConversationTimelineProps>(
 		subagentTitles,
 		onEditUserMessage,
 		editingMessageId,
+		onImplementPlan,
 		urlTransform,
 		mcpServers,
 		computerUseSubagentIds,
@@ -1048,6 +1057,7 @@ export const ConversationTimeline = memo<ConversationTimelineProps>(
 							key={message.id}
 							message={message}
 							parsed={parsed}
+							onImplementPlan={onImplementPlan}
 							urlTransform={urlTransform}
 							isAfterEditingMessage={afterEditingMessageIds.has(message.id)}
 							hideActions={!isLastInChain}

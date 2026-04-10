@@ -584,6 +584,52 @@ export const PlusMenuOpen: Story = {
 	},
 };
 
+export const PlanFirstMenuItem: Story = {
+	args: {
+		onPlanModeToggle: fn(),
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const body = within(canvasElement.ownerDocument.body);
+		await userEvent.click(canvas.getByRole("button", { name: "More options" }));
+		await body.findByRole("dialog");
+		const toggles = await body.findAllByRole("menuitemcheckbox", {
+			name: "Plan first",
+		});
+		const toggle = toggles.at(-1)!;
+		expect(toggle).toBeInTheDocument();
+	},
+};
+
+export const PlanningIndicator: Story = {
+	args: {
+		planModeEnabled: true,
+		onPlanModeToggle: fn(),
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		expect(canvas.getByText("Planning")).toBeVisible();
+	},
+};
+
+export const PlanFirstCheckedState: Story = {
+	args: {
+		planModeEnabled: true,
+		onPlanModeToggle: fn(),
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const body = within(canvasElement.ownerDocument.body);
+		await userEvent.click(canvas.getByRole("button", { name: "More options" }));
+		await body.findByRole("dialog");
+		const toggles = await body.findAllByRole("menuitemcheckbox", {
+			name: "Plan first",
+		});
+		const toggle = toggles.at(-1)!;
+		expect(toggle).toHaveAttribute("aria-checked", "true");
+	},
+};
+
 const confluenceMCP = makeMCPServer({
 	id: "mcp-confluence",
 	display_name: "Confluence Cloud",

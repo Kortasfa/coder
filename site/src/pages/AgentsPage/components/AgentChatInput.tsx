@@ -101,6 +101,8 @@ interface AgentChatInputProps {
 	modelOptions: readonly ModelSelectorOption[];
 	modelSelectorPlaceholder: string;
 	hasModelOptions: boolean;
+	planModeEnabled?: boolean;
+	onPlanModeToggle?: (enabled: boolean) => void;
 	isModelCatalogLoading?: boolean;
 	// Streaming controls (optional, for the detail page).
 	isStreaming?: boolean;
@@ -162,16 +164,16 @@ type ToolBadgeData =
 	| ({ kind: "attached-workspace" } & AttachedWorkspaceInfo)
 	| { kind: "mcp"; server: TypesGen.MCPServerConfig };
 
+const toolBadgeClassName =
+	"inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-secondary px-2 py-0.5 text-xs font-medium text-content-secondary";
+
 const ToolBadge: FC<{
 	badge: ToolBadgeData;
 	onRemoveWorkspace?: () => void;
 	onRemoveMcp?: (serverId: string) => void;
 	className?: string;
 }> = ({ badge, onRemoveWorkspace, onRemoveMcp, className }) => {
-	const badgeCls = cn(
-		"inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-secondary px-2 py-0.5 text-xs font-medium text-content-secondary",
-		className,
-	);
+	const badgeCls = cn(toolBadgeClassName, className);
 
 	if (badge.kind === "attached-workspace") {
 		return (
@@ -256,6 +258,8 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 	modelOptions,
 	modelSelectorPlaceholder,
 	hasModelOptions,
+	planModeEnabled = false,
+	onPlanModeToggle,
 	isModelCatalogLoading = false,
 	isStreaming = false,
 	onInterrupt,
@@ -412,6 +416,11 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 	const handleRemoveWorkspace = () => onWorkspaceChange?.(null);
 	const handleRemoveMcp = (serverId: string) =>
 		handleMcpToggle(serverId, false);
+
+	const handlePlanModeToggle = () => {
+		onPlanModeToggle?.(!planModeEnabled);
+		setPlusMenuOpen(false);
+	};
 
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -779,6 +788,20 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 										Attach image
 									</button>
 								)}
+								<button
+									type="button"
+									role="menuitemcheckbox"
+									aria-checked={planModeEnabled}
+									onClick={handlePlanModeToggle}
+									disabled={isDisabled || !onPlanModeToggle}
+									className="group flex h-8 w-full cursor-pointer items-center gap-1.5 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors hover:text-content-primary disabled:cursor-not-allowed disabled:opacity-50"
+								>
+									<PencilIcon className="size-3.5 shrink-0" />
+									<span>Plan first</span>
+									{planModeEnabled && (
+										<Check className="ml-auto size-icon-sm shrink-0" />
+									)}
+								</button>
 								{workspaceOptions && onWorkspaceChange && (
 									<Popover
 										open={workspacePickerOpen}
@@ -911,6 +934,12 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 								dropdownSide="top"
 								dropdownAlign="center"
 							/>
+						)}
+						{planModeEnabled && (
+							<span className={toolBadgeClassName}>
+								<PencilIcon className="size-3" />
+								Planning
+							</span>
 						)}
 						{/* Badge row — all badges and the pill always
 						 * render so the DOM structure never changes.

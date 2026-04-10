@@ -49,6 +49,7 @@ interface ChatPageTimelineProps {
 		fileBlocks?: readonly TypesGen.ChatMessagePart[],
 	) => void;
 	editingMessageId?: number | null;
+	onImplementPlan?: () => void;
 	urlTransform?: UrlTransform;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 }
@@ -59,6 +60,7 @@ export const ChatPageTimeline: FC<ChatPageTimelineProps> = ({
 	persistedError,
 	onEditUserMessage,
 	editingMessageId,
+	onImplementPlan,
 	urlTransform,
 	mcpServers,
 }) => {
@@ -103,6 +105,7 @@ export const ChatPageTimeline: FC<ChatPageTimelineProps> = ({
 					subagentTitles={subagentTitles}
 					onEditUserMessage={onEditUserMessage}
 					editingMessageId={editingMessageId}
+					onImplementPlan={onImplementPlan}
 					urlTransform={urlTransform}
 					mcpServers={mcpServers}
 					computerUseSubagentIds={computerUseSubagentIds}
@@ -149,6 +152,8 @@ interface ChatPageInputProps {
 	modelOptions: readonly ModelSelectorOption[];
 	modelSelectorPlaceholder: string;
 	modelSelectorHelp?: ReactNode;
+	planModeEnabled?: boolean;
+	onPlanModeToggle?: (enabled: boolean) => void;
 	isModelCatalogLoading?: boolean;
 	// Imperative editor handle plus the one-time initial draft,
 	// owned by the conversation component.
@@ -204,6 +209,8 @@ export const ChatPageInput: FC<ChatPageInputProps> = ({
 	modelOptions,
 	modelSelectorPlaceholder,
 	modelSelectorHelp,
+	planModeEnabled,
+	onPlanModeToggle,
 	isModelCatalogLoading = false,
 	inputRef,
 	initialValue,
@@ -391,6 +398,8 @@ export const ChatPageInput: FC<ChatPageInputProps> = ({
 			onModelChange={onModelChange}
 			modelOptions={modelOptions}
 			modelSelectorPlaceholder={modelSelectorPlaceholder}
+			planModeEnabled={planModeEnabled}
+			onPlanModeToggle={onPlanModeToggle}
 			isModelCatalogLoading={isModelCatalogLoading}
 			mcpServers={mcpServers}
 			selectedMCPServerIds={selectedMCPServerIds}
