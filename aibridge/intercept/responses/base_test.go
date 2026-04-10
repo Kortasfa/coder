@@ -1,4 +1,4 @@
-package responses
+package responses //nolint:testpackage // tests unexported internals
 
 import (
 	"net/http"
@@ -359,13 +359,16 @@ func (mrw *mockResponseWriter) WriteHeader(statusCode int) {
 }
 
 func TestResponseCopierDoesntSendIfNoResponseReceived(t *testing.T) {
+	t.Parallel()
+
 	mrw := mockResponseWriter{}
 
 	respCopy := responseCopier{}
 	body := "test_body"
-	respCopy.buff.Write([]byte(body))
+	_, _ = respCopy.buff.Write([]byte(body)) // bytes.Buffer.Write never fails
 
-	respCopy.forwardResp(&mrw)
+	err := respCopy.forwardResp(&mrw)
+	require.NoError(t, err)
 	require.False(t, mrw.headerCalled)
 	require.False(t, mrw.writeCalled)
 	require.False(t, mrw.writeHeaderCalled)
@@ -373,7 +376,8 @@ func TestResponseCopierDoesntSendIfNoResponseReceived(t *testing.T) {
 	// after response is received data is forwarded
 	respCopy.responseReceived.Store(true)
 
-	respCopy.forwardResp(&mrw)
+	err = respCopy.forwardResp(&mrw)
+	require.NoError(t, err)
 	require.True(t, mrw.headerCalled)
 	require.True(t, mrw.writeCalled)
 	require.True(t, mrw.writeHeaderCalled)

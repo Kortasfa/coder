@@ -42,7 +42,7 @@ type responsesInterceptionBase struct {
 	// clientHeaders are the original HTTP headers from the client request.
 	clientHeaders  http.Header
 	authHeaderName string
-	reqPayload     ResponsesRequestPayload
+	reqPayload     RequestPayload
 
 	cfg      config.OpenAI
 	recorder recorder.Recorder
@@ -89,9 +89,9 @@ func (i *responsesInterceptionBase) Credential() intercept.CredentialInfo {
 	return i.credential
 }
 
-func (i *responsesInterceptionBase) Setup(logger slog.Logger, recorder recorder.Recorder, mcpProxy mcp.ServerProxier) {
+func (i *responsesInterceptionBase) Setup(logger slog.Logger, rec recorder.Recorder, mcpProxy mcp.ServerProxier) {
 	i.logger = logger.With(slog.F("model", i.Model()))
-	i.recorder = recorder
+	i.recorder = rec
 	i.mcpProxy = mcpProxy
 }
 
@@ -127,7 +127,13 @@ func (i *responsesInterceptionBase) validateRequest(ctx context.Context, w http.
 // sendCustomErr sends custom responses.Error error to the client
 // it should only be called before any data is sent back to the client
 func (i *responsesInterceptionBase) sendCustomErr(ctx context.Context, w http.ResponseWriter, code int, err error) {
-	respErr := responses.Error{
+	// Same JSON shape as responses.Error but using a plain struct because
+	// responses.Error embeds *http.Request whose GetBody func field
+	// is not JSON-marshalable (SA1026).
+	respErr := struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{
 		Code:    strconv.Itoa(code),
 		Message: err.Error(),
 	}
@@ -222,15 +228,15 @@ func (i *responsesInterceptionBase) recordNonInjectedToolUsage(ctx context.Conte
 
 func (i *responsesInterceptionBase) parseFunctionCallJSONArgs(ctx context.Context, raw string) recorder.ToolArgs {
 	trimmed := strings.TrimSpace(raw)
-	if trimmed != "" {
-		var args recorder.ToolArgs
-		if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
-			i.logger.Warn(ctx, "failed to unmarshal tool args", slog.Error(err))
-		} else {
-			return args
-		}
+	if trimmed == "" {
+		return trimmed
 	}
-	return trimmed
+	var args recorder.ToolArgs
+	if err := json.Unmarshal([]byte(trimmed), &args); err != nil {
+		i.logger.Warn(ctx, "failed to unmarshal tool args", slog.Error(err))
+		return trimmed
+	}
+	return args
 }
 
 func (i *responsesInterceptionBase) recordTokenUsage(ctx context.Context, response *responses.Response) {
@@ -264,7 +270,7 @@ func (i *responsesInterceptionBase) recordTokenUsage(ctx context.Context, respon
 // extractModelThoughts extracts model thoughts from response output items.
 // It captures both reasoning summary items and commentary messages (message
 // output items with "phase": "commentary") as model thoughts.
-func (i *responsesInterceptionBase) extractModelThoughts(response *responses.Response) []*recorder.ModelThoughtRecord {
+func (*responsesInterceptionBase) extractModelThoughts(response *responses.Response) []*recorder.ModelThoughtRecord {
 	if response == nil {
 		return nil
 	}

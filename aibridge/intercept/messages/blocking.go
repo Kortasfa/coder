@@ -31,7 +31,7 @@ type BlockingInterception struct {
 
 func NewBlockingInterceptor(
 	id uuid.UUID,
-	reqPayload MessagesRequestPayload,
+	reqPayload RequestPayload,
 	providerName string,
 	cfg config.Anthropic,
 	bedrockCfg *config.AWSBedrock,
@@ -53,15 +53,15 @@ func NewBlockingInterceptor(
 	}}
 }
 
-func (i *BlockingInterception) Setup(logger slog.Logger, recorder recorder.Recorder, mcpProxy mcp.ServerProxier) {
-	i.interceptionBase.Setup(logger.Named("blocking"), recorder, mcpProxy)
+func (i *BlockingInterception) Setup(logger slog.Logger, rec recorder.Recorder, mcpProxy mcp.ServerProxier) {
+	i.interceptionBase.Setup(logger.Named("blocking"), rec, mcpProxy)
 }
 
 func (i *BlockingInterception) TraceAttributes(r *http.Request) []attribute.KeyValue {
 	return i.interceptionBase.baseTraceAttributes(r, false)
 }
 
-func (s *BlockingInterception) Streaming() bool {
+func (*BlockingInterception) Streaming() bool {
 	return false
 }
 

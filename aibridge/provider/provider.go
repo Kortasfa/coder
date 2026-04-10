@@ -10,7 +10,7 @@ import (
 	"github.com/coder/coder/v2/aibridge/intercept"
 )
 
-var UnknownRoute = xerrors.New("unknown route")
+var ErrUnknownRoute = xerrors.New("unknown route")
 
 // Provider defines routes (bridged and passed through) for given provider.
 // Bridged routes are processed by dedicated interceptors.

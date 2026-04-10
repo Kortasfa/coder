@@ -28,7 +28,7 @@ type BlockingResponsesInterceptor struct {
 
 func NewBlockingInterceptor(
 	id uuid.UUID,
-	reqPayload ResponsesRequestPayload,
+	reqPayload RequestPayload,
 	providerName string,
 	cfg config.OpenAI,
 	clientHeaders http.Header,
@@ -50,11 +50,11 @@ func NewBlockingInterceptor(
 	}
 }
 
-func (i *BlockingResponsesInterceptor) Setup(logger slog.Logger, recorder recorder.Recorder, mcpProxy mcp.ServerProxier) {
-	i.responsesInterceptionBase.Setup(logger.Named("blocking"), recorder, mcpProxy)
+func (i *BlockingResponsesInterceptor) Setup(logger slog.Logger, rec recorder.Recorder, mcpProxy mcp.ServerProxier) {
+	i.responsesInterceptionBase.Setup(logger.Named("blocking"), rec, mcpProxy)
 }
 
-func (i *BlockingResponsesInterceptor) Streaming() bool {
+func (*BlockingResponsesInterceptor) Streaming() bool {
 	return false
 }
 

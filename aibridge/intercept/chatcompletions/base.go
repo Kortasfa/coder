@@ -79,9 +79,9 @@ func (i *interceptionBase) Credential() intercept.CredentialInfo {
 	return i.credential
 }
 
-func (i *interceptionBase) Setup(logger slog.Logger, recorder recorder.Recorder, mcpProxy mcp.ServerProxier) {
+func (i *interceptionBase) Setup(logger slog.Logger, rec recorder.Recorder, mcpProxy mcp.ServerProxier) {
 	i.logger = logger
-	i.recorder = recorder
+	i.recorder = rec
 	i.mcpProxy = mcpProxy
 }
 
@@ -98,13 +98,13 @@ func (i *interceptionBase) CorrelatingToolCallID() *string {
 	return &msg.OfTool.ToolCallID
 }
 
-func (s *interceptionBase) baseTraceAttributes(r *http.Request, streaming bool) []attribute.KeyValue {
+func (i *interceptionBase) baseTraceAttributes(r *http.Request, streaming bool) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		attribute.String(tracing.RequestPath, r.URL.Path),
-		attribute.String(tracing.InterceptionID, s.id.String()),
+		attribute.String(tracing.InterceptionID, i.id.String()),
 		attribute.String(tracing.InitiatorID, aibcontext.ActorIDFromContext(r.Context())),
-		attribute.String(tracing.Provider, s.providerName),
-		attribute.String(tracing.Model, s.Model()),
+		attribute.String(tracing.Provider, i.providerName),
+		attribute.String(tracing.Model, i.Model()),
 		attribute.Bool(tracing.Streaming, streaming),
 	}
 }
@@ -114,10 +114,10 @@ func (i *interceptionBase) Model() string {
 		return "coder-aibridge-unknown"
 	}
 
-	return string(i.req.Model)
+	return i.req.Model
 }
 
-func (i *interceptionBase) newErrorResponse(err error) map[string]any {
+func (*interceptionBase) newErrorResponse(err error) map[string]any {
 	return map[string]any{
 		"error":   true,
 		"message": err.Error(),
@@ -172,7 +172,7 @@ func (i *interceptionBase) unmarshalArgs(in string) (args recorder.ToolArgs) {
 }
 
 // writeUpstreamError marshals and writes a given error.
-func (i *interceptionBase) writeUpstreamError(w http.ResponseWriter, oaiErr *errorResponse) {
+func (i *interceptionBase) writeUpstreamError(w http.ResponseWriter, oaiErr *chatCompletionResponseError) {
 	if oaiErr == nil {
 		return
 	}
@@ -182,7 +182,7 @@ func (i *interceptionBase) writeUpstreamError(w http.ResponseWriter, oaiErr *err
 
 	out, err := json.Marshal(oaiErr)
 	if err != nil {
-		i.logger.Warn(context.Background(), "failed to marshal upstream error", slog.Error(err), slog.F("error_payload", slog.F("%+v", oaiErr)))
+		i.logger.Warn(context.Background(), "failed to marshal upstream error", slog.Error(err), slog.F("error_payload", oaiErr))
 		// Response has to match expected format.
 		_, _ = w.Write([]byte(`{
 	"error": {
@@ -227,13 +227,13 @@ func calculateActualInputTokenUsage(in openai.CompletionUsage) int64 {
 		in.PromptTokensDetails.CachedTokens /* The aggregated number of text input tokens that has been cached from previous requests. */
 }
 
-func getErrorResponse(err error) *errorResponse {
+func getErrorResponse(err error) *chatCompletionResponseError {
 	var apiErr *openai.Error
 	if !errors.As(err, &apiErr) {
 		return nil
 	}
 
-	return &errorResponse{
+	return &chatCompletionResponseError{
 		ErrorObject: &shared.ErrorObject{
 			Code:    apiErr.Code,
 			Message: apiErr.Message,
@@ -243,15 +243,15 @@ func getErrorResponse(err error) *errorResponse {
 	}
 }
 
-var _ error = &errorResponse{}
+var _ error = &chatCompletionResponseError{}
 
-type errorResponse struct {
+type chatCompletionResponseError struct {
 	ErrorObject *shared.ErrorObject `json:"error"`
 	StatusCode  int                 `json:"-"`
 }
 
-func newErrorResponse(msg error) *errorResponse {
-	return &errorResponse{
+func newErrorResponse(msg error) *chatCompletionResponseError {
+	return &chatCompletionResponseError{
 		ErrorObject: &shared.ErrorObject{
 			Code:    "error",
 			Message: msg.Error(),
@@ -260,7 +260,7 @@ func newErrorResponse(msg error) *errorResponse {
 	}
 }
 
-func (a *errorResponse) Error() string {
+func (a *chatCompletionResponseError) Error() string {
 	if a.ErrorObject == nil {
 		return ""
 	}

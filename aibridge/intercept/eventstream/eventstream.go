@@ -32,7 +32,6 @@ type EventStream struct {
 	initiated    atomic.Bool
 	initiateOnce sync.Once
 
-	closeOnce    sync.Once
 	shutdownOnce sync.Once
 	eventsCh     chan event
 
@@ -133,7 +132,7 @@ func (s *EventStream) Start(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := flush(w); err != nil {
-			s.logger.Warn(ctx, "failed to flush", slog.Error(err))
+			s.logger.Warn(ctx, "failed to flush event stream", slog.Error(err))
 			return
 		}
 
@@ -240,8 +239,7 @@ func flush(w http.ResponseWriter) (err error) {
 	}
 
 	defer func() {
-		if r := recover(); r != nil {
-			// Likely a broken connection, don't spam the logs.
+		if r := recover(); r != nil { //nolint:revive,staticcheck // Intentionally swallowed; likely a broken connection.
 		}
 	}()
 

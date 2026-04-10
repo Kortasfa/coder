@@ -54,16 +54,16 @@ func NewStreamingInterceptor(
 	}}
 }
 
-func (i *StreamingInterception) Setup(logger slog.Logger, recorder recorder.Recorder, mcpProxy mcp.ServerProxier) {
-	i.interceptionBase.Setup(logger.Named("streaming"), recorder, mcpProxy)
+func (i *StreamingInterception) Setup(logger slog.Logger, rec recorder.Recorder, mcpProxy mcp.ServerProxier) {
+	i.interceptionBase.Setup(logger.Named("streaming"), rec, mcpProxy)
 }
 
-func (i *StreamingInterception) Streaming() bool {
+func (*StreamingInterception) Streaming() bool {
 	return true
 }
 
-func (s *StreamingInterception) TraceAttributes(r *http.Request) []attribute.KeyValue {
-	return s.interceptionBase.baseTraceAttributes(r, true)
+func (i *StreamingInterception) TraceAttributes(r *http.Request) []attribute.KeyValue {
+	return i.interceptionBase.baseTraceAttributes(r, true)
 }
 
 // ProcessRequest handles a request to /v1/chat/completions.
@@ -189,16 +189,14 @@ func (i *StreamingInterception) ProcessRequest(w http.ResponseWriter, r *http.Re
 				})
 
 				toolCall = nil
-			} else {
+			} else if stream.Err() == nil {
 				// When the provider responds with only tool calls (no text content),
 				// no chunks are relayed to the client, so the stream is not yet
 				// initiated. Initiate it here so the SSE headers are sent and the
 				// ping ticker is started, preventing client timeout during tool invocation.
 				// Only initiate if no stream error, if there's an error, we'll return
 				// an HTTP error response instead of starting an SSE stream.
-				if stream.Err() == nil {
-					events.InitiateStream(w)
-				}
+				events.InitiateStream(w)
 			}
 		}
 
@@ -231,41 +229,41 @@ func (i *StreamingInterception) ProcessRequest(w http.ResponseWriter, r *http.Re
 			})
 		}
 
-		if events.IsStreaming() {
-			// Check if the stream encountered any errors.
-			if streamErr := stream.Err(); streamErr != nil {
-				if eventstream.IsUnrecoverableError(streamErr) {
-					logger.Debug(ctx, "stream terminated", slog.Error(streamErr))
-					// We can't reflect an error back if there's a connection error or the request context was canceled.
-				} else if oaiErr := getErrorResponse(streamErr); oaiErr != nil {
-					logger.Warn(ctx, "openai stream error", slog.Error(streamErr))
-					interceptionErr = oaiErr
-				} else {
-					logger.Warn(ctx, "unknown error", slog.Error(streamErr))
-					// Unfortunately, the OpenAI SDK does not support parsing errors received in the stream
-					// into known types (i.e. [shared.OverloadedError]).
-					// See https://github.com/openai/openai-go/blob/v2.7.0/packages/ssestream/ssestream.go#L171
-					// All it does is wrap the payload in an error - which is all we can return, currently.
-					interceptionErr = newErrorResponse(xerrors.Errorf("unknown stream error: %w", streamErr))
-				}
-			} else if lastErr != nil {
-				// Otherwise check if any logical errors occurred during processing.
-				logger.Warn(ctx, "stream failed", slog.Error(lastErr))
-				interceptionErr = newErrorResponse(xerrors.Errorf("processing error: %w", lastErr))
-			}
-
-			if interceptionErr != nil {
-				payload, err := i.marshalErr(interceptionErr)
-				if err != nil {
-					logger.Warn(ctx, "failed to marshal error", slog.Error(err), slog.F("error_payload", slog.F("%+v", interceptionErr)))
-				} else if err := events.Send(streamCtx, payload); err != nil {
-					logger.Warn(ctx, "failed to relay error", slog.Error(err), slog.F("payload", payload))
-				}
-			}
-		} else {
+		if !events.IsStreaming() {
 			// response/downstream Stream has not started yet; write error response and exit.
 			i.writeUpstreamError(w, getErrorResponse(stream.Err()))
 			return stream.Err()
+		}
+
+		// Check if the stream encountered any errors.
+		if streamErr := stream.Err(); streamErr != nil {
+			if eventstream.IsUnrecoverableError(streamErr) {
+				logger.Debug(ctx, "stream terminated", slog.Error(streamErr))
+				// We can't reflect an error back if there's a connection error or the request context was canceled.
+			} else if oaiErr := getErrorResponse(streamErr); oaiErr != nil {
+				logger.Warn(ctx, "openai stream error", slog.Error(streamErr))
+				interceptionErr = oaiErr
+			} else {
+				logger.Warn(ctx, "unknown stream error encountered", slog.Error(streamErr))
+				// Unfortunately, the OpenAI SDK does not support parsing errors received in the stream
+				// into known types (i.e. [shared.OverloadedError]).
+				// See https://github.com/openai/openai-go/blob/v2.7.0/packages/ssestream/ssestream.go#L171
+				// All it does is wrap the payload in an error - which is all we can return, currently.
+				interceptionErr = newErrorResponse(xerrors.Errorf("unknown stream error: %w", streamErr))
+			}
+		} else if lastErr != nil {
+			// Otherwise check if any logical errors occurred during processing.
+			logger.Warn(ctx, "stream processing failed", slog.Error(lastErr))
+			interceptionErr = newErrorResponse(xerrors.Errorf("processing error: %w", lastErr))
+		}
+
+		if interceptionErr != nil {
+			payload, err := i.marshalErr(interceptionErr)
+			if err != nil {
+				logger.Warn(ctx, "failed to marshal error", slog.Error(err), slog.F("error_payload", interceptionErr.Error()))
+			} else if err := events.Send(streamCtx, payload); err != nil {
+				logger.Warn(ctx, "failed to relay error", slog.Error(err), slog.F("payload", payload))
+			}
 		}
 
 		// No tool call, nothing more to do.
@@ -390,11 +388,12 @@ func (i *StreamingInterception) marshalErr(err error) ([]byte, error) {
 	return i.encodeForStream(data), nil
 }
 
-func (i *StreamingInterception) encodeForStream(payload []byte) []byte {
+func (*StreamingInterception) encodeForStream(payload []byte) []byte {
+	// bytes.Buffer writes to in-memory storage and never return errors.
 	var buf bytes.Buffer
-	buf.WriteString("data: ")
-	buf.Write(payload)
-	buf.WriteString("\n\n")
+	_, _ = buf.WriteString("data: ")
+	_, _ = buf.Write(payload)
+	_, _ = buf.WriteString("\n\n")
 	return buf.Bytes()
 }
 

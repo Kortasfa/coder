@@ -35,7 +35,7 @@ type StreamingResponsesInterceptor struct {
 
 func NewStreamingInterceptor(
 	id uuid.UUID,
-	reqPayload ResponsesRequestPayload,
+	reqPayload RequestPayload,
 	providerName string,
 	cfg config.OpenAI,
 	clientHeaders http.Header,
@@ -57,11 +57,11 @@ func NewStreamingInterceptor(
 	}
 }
 
-func (i *StreamingResponsesInterceptor) Setup(logger slog.Logger, recorder recorder.Recorder, mcpProxy mcp.ServerProxier) {
-	i.responsesInterceptionBase.Setup(logger.Named("streaming"), recorder, mcpProxy)
+func (i *StreamingResponsesInterceptor) Setup(logger slog.Logger, rec recorder.Recorder, mcpProxy mcp.ServerProxier) {
+	i.responsesInterceptionBase.Setup(logger.Named("streaming"), rec, mcpProxy)
 }
 
-func (i *StreamingResponsesInterceptor) Streaming() bool {
+func (*StreamingResponsesInterceptor) Streaming() bool {
 	return true
 }
 

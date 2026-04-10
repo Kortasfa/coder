@@ -65,7 +65,7 @@ var bedrockSupportedBetaFlags = map[string]bool{
 type interceptionBase struct {
 	id           uuid.UUID
 	providerName string
-	reqPayload   MessagesRequestPayload
+	reqPayload   RequestPayload
 
 	cfg        aibconfig.Anthropic
 	bedrockCfg *aibconfig.AWSBedrock
@@ -90,9 +90,9 @@ func (i *interceptionBase) Credential() intercept.CredentialInfo {
 	return i.credential
 }
 
-func (i *interceptionBase) Setup(logger slog.Logger, recorder recorder.Recorder, mcpProxy mcp.ServerProxier) {
+func (i *interceptionBase) Setup(logger slog.Logger, rec recorder.Recorder, mcpProxy mcp.ServerProxier) {
 	i.logger = logger
-	i.recorder = recorder
+	i.recorder = rec
 	i.mcpProxy = mcpProxy
 }
 
@@ -116,15 +116,15 @@ func (i *interceptionBase) Model() string {
 	return i.reqPayload.model()
 }
 
-func (s *interceptionBase) baseTraceAttributes(r *http.Request, streaming bool) []attribute.KeyValue {
+func (i *interceptionBase) baseTraceAttributes(r *http.Request, streaming bool) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		attribute.String(tracing.RequestPath, r.URL.Path),
-		attribute.String(tracing.InterceptionID, s.id.String()),
+		attribute.String(tracing.InterceptionID, i.id.String()),
 		attribute.String(tracing.InitiatorID, aibcontext.ActorIDFromContext(r.Context())),
-		attribute.String(tracing.Provider, s.providerName),
-		attribute.String(tracing.Model, s.Model()),
+		attribute.String(tracing.Provider, i.providerName),
+		attribute.String(tracing.Model, i.Model()),
 		attribute.Bool(tracing.Streaming, streaming),
-		attribute.Bool(tracing.IsBedrock, s.bedrockCfg != nil),
+		attribute.Bool(tracing.IsBedrock, i.bedrockCfg != nil),
 	}
 }
 
@@ -174,24 +174,22 @@ func (i *interceptionBase) disableParallelToolCalls() {
 }
 
 // extractModelThoughts returns any thinking blocks that were returned in the response.
-func (i *interceptionBase) extractModelThoughts(msg *anthropic.Message) []*recorder.ModelThoughtRecord {
+func (*interceptionBase) extractModelThoughts(msg *anthropic.Message) []*recorder.ModelThoughtRecord {
 	if msg == nil {
 		return nil
 	}
 
 	var thoughtRecords []*recorder.ModelThoughtRecord
 	for _, block := range msg.Content {
-		switch variant := block.AsAny().(type) {
-		case anthropic.ThinkingBlock:
-			if variant.Thinking == "" {
-				continue
-			}
-			thoughtRecords = append(thoughtRecords, &recorder.ModelThoughtRecord{
-				Content:  variant.Thinking,
-				Metadata: recorder.Metadata{"source": recorder.ThoughtSourceThinking},
-			})
-		}
 		// anthropic.RedactedThinkingBlock also exists, but there's nothing useful we can capture.
+		variant, ok := block.AsAny().(anthropic.ThinkingBlock)
+		if !ok || variant.Thinking == "" {
+			continue
+		}
+		thoughtRecords = append(thoughtRecords, &recorder.ModelThoughtRecord{
+			Content:  variant.Thinking,
+			Metadata: recorder.Metadata{"source": recorder.ThoughtSourceThinking},
+		})
 	}
 	return thoughtRecords
 }
@@ -264,7 +262,7 @@ func (i *interceptionBase) withBody() option.RequestOption {
 	return option.WithRequestBody("application/json", []byte(i.reqPayload))
 }
 
-func (i *interceptionBase) withAWSBedrockOptions(ctx context.Context, cfg *aibconfig.AWSBedrock) ([]option.RequestOption, error) {
+func (*interceptionBase) withAWSBedrockOptions(ctx context.Context, cfg *aibconfig.AWSBedrock) ([]option.RequestOption, error) {
 	if cfg == nil {
 		return nil, xerrors.New("nil config given")
 	}
@@ -405,7 +403,7 @@ func filterBedrockBetaFlags(headers http.Header, model string) {
 }
 
 // writeUpstreamError marshals and writes a given error.
-func (i *interceptionBase) writeUpstreamError(w http.ResponseWriter, antErr *ErrorResponse) {
+func (i *interceptionBase) writeUpstreamError(w http.ResponseWriter, antErr *messagesResponseError) {
 	if antErr == nil {
 		return
 	}
@@ -415,7 +413,7 @@ func (i *interceptionBase) writeUpstreamError(w http.ResponseWriter, antErr *Err
 
 	out, err := json.Marshal(antErr)
 	if err != nil {
-		i.logger.Warn(context.Background(), "failed to marshal upstream error", slog.Error(err), slog.F("error_payload", slog.F("%+v", antErr)))
+		i.logger.Warn(context.Background(), "failed to marshal upstream error", slog.Error(err), slog.F("error_payload", antErr))
 		// Response has to match expected format.
 		// See https://docs.claude.com/en/api/errors#error-shapes.
 		_, _ = w.Write([]byte(fmt.Sprintf(`{
@@ -487,7 +485,7 @@ func accumulateUsage(dest, src any) {
 	}
 }
 
-func getErrorResponse(err error) *ErrorResponse {
+func getErrorResponse(err error) *messagesResponseError {
 	var apierr *anthropic.Error
 	if !errors.As(err, &apierr) {
 		return nil
@@ -505,7 +503,7 @@ func getErrorResponse(err error) *ErrorResponse {
 		typ = string(detail.Type)
 	}
 
-	return &ErrorResponse{
+	return &messagesResponseError{
 		ErrorResponse: &anthropic.ErrorResponse{
 			Error: anthropic.ErrorObjectUnion{
 				Message: msg,
@@ -517,16 +515,16 @@ func getErrorResponse(err error) *ErrorResponse {
 	}
 }
 
-var _ error = &ErrorResponse{}
+var _ error = &messagesResponseError{}
 
-type ErrorResponse struct {
+type messagesResponseError struct {
 	*anthropic.ErrorResponse
 
 	StatusCode int `json:"-"`
 }
 
-func newErrorResponse(msg error) *ErrorResponse {
-	return &ErrorResponse{
+func newErrorResponse(msg error) *messagesResponseError {
+	return &messagesResponseError{
 		ErrorResponse: &shared.ErrorResponse{
 			Error: shared.ErrorObjectUnion{
 				Message: msg.Error(),
@@ -536,7 +534,7 @@ func newErrorResponse(msg error) *ErrorResponse {
 	}
 }
 
-func (a *ErrorResponse) Error() string {
+func (a *messagesResponseError) Error() string {
 	if a.ErrorResponse == nil {
 		return ""
 	}

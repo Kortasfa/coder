@@ -105,10 +105,11 @@ func (d *dumper) dumpRequest(req *http.Request) error {
 	if err != nil {
 		return xerrors.Errorf("write request header terminator: %w", err)
 	}
-	buf.Write(prettyBody)
-	buf.WriteByte('\n')
+	// bytes.Buffer writes to in-memory storage and never return errors.
+	_, _ = buf.Write(prettyBody)
+	_ = buf.WriteByte('\n')
 
-	return os.WriteFile(dumpPath, buf.Bytes(), 0o644)
+	return os.WriteFile(dumpPath, buf.Bytes(), 0o600)
 }
 
 func (d *dumper) dumpResponse(resp *http.Response) error {
@@ -129,19 +130,19 @@ func (d *dumper) dumpResponse(resp *http.Response) error {
 		return xerrors.Errorf("write response header terminator: %w", err)
 	}
 
-	// Wrap the response body to capture it as it streams
-	if resp.Body != nil {
-		resp.Body = &streamingBodyDumper{
-			body:       resp.Body,
-			dumpPath:   dumpPath,
-			headerData: headerBuf.Bytes(),
-			logger: func(err error) {
-				d.logger.Named("apidump").Warn(context.Background(), "failed to initialize response dump", slog.Error(err))
-			},
-		}
-	} else {
+	if resp.Body == nil {
 		// No body, just write headers
-		return os.WriteFile(dumpPath, headerBuf.Bytes(), 0o644)
+		return os.WriteFile(dumpPath, headerBuf.Bytes(), 0o600)
+	}
+
+	// Wrap the response body to capture it as it streams
+	resp.Body = &streamingBodyDumper{
+		body:       resp.Body,
+		dumpPath:   dumpPath,
+		headerData: headerBuf.Bytes(),
+		logger: func(err error) {
+			d.logger.Named("apidump").Warn(context.Background(), "failed to initialize response dump", slog.Error(err))
+		},
 	}
 
 	return nil
@@ -152,7 +153,7 @@ func (d *dumper) dumpResponse(resp *http.Response) error {
 // for deterministic output.
 // `sensitive` and `overrides` must both supply keys in canoncialized form.
 // See [textproto.MIMEHeader].
-func (d *dumper) writeRedactedHeaders(w io.Writer, headers http.Header, sensitive map[string]struct{}, overrides map[string]string) error {
+func (*dumper) writeRedactedHeaders(w io.Writer, headers http.Header, sensitive map[string]struct{}, overrides map[string]string) error {
 	// Collect all header keys including overrides.
 	headerKeys := make([]string, 0, len(headers)+len(overrides))
 	seen := make(map[string]struct{}, len(headers)+len(overrides))

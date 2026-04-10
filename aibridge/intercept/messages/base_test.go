@@ -1,4 +1,4 @@
-package messages
+package messages //nolint:testpackage // tests unexported internals
 
 import (
 	"context"
@@ -197,6 +197,8 @@ func TestAWSBedrockValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			base := &interceptionBase{}
 			opts, err := base.withAWSBedrockOptions(context.Background(), tt.cfg)
 
@@ -212,7 +214,10 @@ func TestAWSBedrockValidation(t *testing.T) {
 }
 
 func TestAccumulateUsage(t *testing.T) {
+	t.Parallel()
+
 	t.Run("Usage to Usage", func(t *testing.T) {
+		t.Parallel()
 		dest := &anthropic.Usage{
 			InputTokens:              10,
 			OutputTokens:             20,
@@ -253,6 +258,8 @@ func TestAccumulateUsage(t *testing.T) {
 	})
 
 	t.Run("MessageDeltaUsage to MessageDeltaUsage", func(t *testing.T) {
+		t.Parallel()
+
 		dest := &anthropic.MessageDeltaUsage{
 			InputTokens:              10,
 			OutputTokens:             20,
@@ -283,6 +290,8 @@ func TestAccumulateUsage(t *testing.T) {
 	})
 
 	t.Run("Usage to MessageDeltaUsage", func(t *testing.T) {
+		t.Parallel()
+
 		dest := &anthropic.MessageDeltaUsage{
 			InputTokens:              10,
 			OutputTokens:             20,
@@ -317,6 +326,8 @@ func TestAccumulateUsage(t *testing.T) {
 	})
 
 	t.Run("MessageDeltaUsage to Usage", func(t *testing.T) {
+		t.Parallel()
+
 		dest := &anthropic.Usage{
 			InputTokens:              10,
 			OutputTokens:             20,
@@ -354,6 +365,8 @@ func TestAccumulateUsage(t *testing.T) {
 	})
 
 	t.Run("Nil or unsupported types", func(t *testing.T) {
+		t.Parallel()
+
 		// Test with nil dest
 		var nilUsage *anthropic.Usage
 		source := anthropic.Usage{InputTokens: 10}
@@ -763,10 +776,10 @@ func TestAugmentRequestForBedrock_AdaptiveThinking(t *testing.T) {
 	}
 }
 
-func mustMessagesPayload(t *testing.T, requestBody string) MessagesRequestPayload {
+func mustMessagesPayload(t *testing.T, requestBody string) RequestPayload {
 	t.Helper()
 
-	payload, err := NewMessagesRequestPayload([]byte(requestBody))
+	payload, err := NewRequestPayload([]byte(requestBody))
 	require.NoError(t, err)
 
 	return payload
@@ -777,11 +790,11 @@ type mockServerProxier struct {
 	tools []*mcp.Tool
 }
 
-func (m *mockServerProxier) Init(context.Context) error {
+func (*mockServerProxier) Init(context.Context) error {
 	return nil
 }
 
-func (m *mockServerProxier) Shutdown(context.Context) error {
+func (*mockServerProxier) Shutdown(context.Context) error {
 	return nil
 }
 
@@ -798,8 +811,8 @@ func (m *mockServerProxier) GetTool(id string) *mcp.Tool {
 	return nil
 }
 
-func (m *mockServerProxier) CallTool(context.Context, string, any) (*mcpgo.CallToolResult, error) {
-	return nil, nil
+func (*mockServerProxier) CallTool(context.Context, string, any) (*mcpgo.CallToolResult, error) {
+	return nil, nil //nolint:nilnil // mock: no-op implementation
 }
 
 func TestFilterBedrockBetaFlags(t *testing.T) {
