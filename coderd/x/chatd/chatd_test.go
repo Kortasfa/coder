@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	_ "unsafe"
 
 	"charm.land/fantasy"
 	"github.com/google/uuid"
@@ -55,19 +54,6 @@ import (
 	"github.com/coder/coder/v2/testutil"
 	"github.com/coder/quartz"
 )
-
-type linkedTurnPolicy struct {
-	_ bool
-}
-
-//go:linkname resolveTurnPolicyForTest github.com/coder/coder/v2/coderd/x/chatd.resolveTurnPolicy
-func resolveTurnPolicyForTest(mode database.NullChatTurnMode) linkedTurnPolicy
-
-//go:linkname turnPolicyAllowedToolsForTest github.com/coder/coder/v2/coderd/x/chatd.turnPolicy.allowedTools
-func turnPolicyAllowedToolsForTest(tp linkedTurnPolicy, allTools []fantasy.AgentTool) []string
-
-//go:linkname turnPolicyStopAfterToolsForTest github.com/coder/coder/v2/coderd/x/chatd.turnPolicy.stopAfterTools
-func turnPolicyStopAfterToolsForTest(tp linkedTurnPolicy) map[string]bool
 
 type recordedOpenAIRequest struct {
 	Messages []chattest.OpenAIMessage
@@ -754,8 +740,8 @@ func TestTurnPolicyHelpers(t *testing.T) {
 	t.Run("StandardTurnExcludesProposePlan", func(t *testing.T) {
 		t.Parallel()
 
-		standardPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{})
-		allowed := turnPolicyAllowedToolsForTest(standardPolicy, []fantasy.AgentTool{
+		standardPolicy := chatd.ResolveTurnPolicyForTest(database.NullChatTurnMode{})
+		allowed := chatd.TurnPolicyAllowedToolsForTest(standardPolicy, []fantasy.AgentTool{
 			newTool("read_file"),
 			newTool("write_file"),
 			newTool("execute"),
@@ -773,11 +759,11 @@ func TestTurnPolicyHelpers(t *testing.T) {
 	t.Run("PlanTurnKeepsOnlyAllowlistPlusUnknown", func(t *testing.T) {
 		t.Parallel()
 
-		planPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{
+		planPolicy := chatd.ResolveTurnPolicyForTest(database.NullChatTurnMode{
 			ChatTurnMode: database.ChatTurnModePlan,
 			Valid:        true,
 		})
-		allowed := turnPolicyAllowedToolsForTest(planPolicy, allTools)
+		allowed := chatd.TurnPolicyAllowedToolsForTest(planPolicy, allTools)
 
 		for _, name := range []string{"read_file", "write_file", "edit_files", "propose_plan", "spawn_agent", "wait_agent", "mcp_custom"} {
 			require.Contains(t, allowed, name)
@@ -790,18 +776,18 @@ func TestTurnPolicyHelpers(t *testing.T) {
 	t.Run("StandardTurnStopAfterToolsNil", func(t *testing.T) {
 		t.Parallel()
 
-		standardPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{})
-		require.Nil(t, turnPolicyStopAfterToolsForTest(standardPolicy))
+		standardPolicy := chatd.ResolveTurnPolicyForTest(database.NullChatTurnMode{})
+		require.Nil(t, chatd.TurnPolicyStopAfterToolsForTest(standardPolicy))
 	})
 
 	t.Run("PlanTurnStopAfterToolsProposePlan", func(t *testing.T) {
 		t.Parallel()
 
-		planPolicy := resolveTurnPolicyForTest(database.NullChatTurnMode{
+		planPolicy := chatd.ResolveTurnPolicyForTest(database.NullChatTurnMode{
 			ChatTurnMode: database.ChatTurnModePlan,
 			Valid:        true,
 		})
-		require.Equal(t, map[string]bool{"propose_plan": true}, turnPolicyStopAfterToolsForTest(planPolicy))
+		require.Equal(t, map[string]bool{"propose_plan": true}, chatd.TurnPolicyStopAfterToolsForTest(planPolicy))
 	})
 }
 
