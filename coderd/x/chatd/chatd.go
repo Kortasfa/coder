@@ -131,6 +131,7 @@ type Server struct {
 	providerAPIKeys                chatprovider.ProviderAPIKeys
 	configCache                    *chatConfigCache
 	configCacheUnsubscribe         func()
+	controlUnsubscribe             func()
 
 	// chatStreams stores per-chat stream state. Using sync.Map
 	// gives each chat independent locking — concurrent chats
@@ -720,6 +721,7 @@ type chatStreamState struct {
 type heartbeatEntry struct {
 	cancelWithCause context.CancelCauseFunc
 	chatID          uuid.UUID
+	runGeneration   int64
 	workspaceID     uuid.NullUUID
 	logger          slog.Logger
 }
@@ -745,11 +747,12 @@ var (
 	// ErrEditedMessageNotUser indicates a non-user message edit attempt.
 	ErrEditedMessageNotUser = xerrors.New("only user messages can be edited")
 
-	// errChatTakenByOtherWorker is a sentinel used inside the
-	// processChat cleanup transaction to signal that another
-	// worker acquired the chat, so all post-TX side effects
-	// (status publish, pubsub, web push) must be skipped.
-	errChatTakenByOtherWorker = xerrors.New("chat acquired by another worker")
+	// errChatSuperseded is a sentinel used inside the processChat
+	// cleanup transaction to signal that a newer worker ownership or
+	// run generation has superseded the local run. In that case all
+	// post-TX side effects (status publish, pubsub, web push) must
+	// be skipped.
+	errChatSuperseded = xerrors.New("chat run superseded")
 )
 
 // UsageLimitExceededError indicates the user has exceeded their chat spend
@@ -894,8 +897,9 @@ func (p *Server) CreateChat(ctx context.Context, opts CreateOptions) (database.C
 			Mode:              opts.ChatMode,
 			// Chats created with an initial user message start pending.
 			// Waiting is reserved for idle chats with no pending work.
-			Status:       database.ChatStatusPending,
-			MCPServerIDs: opts.MCPServerIDs,
+			Status:        database.ChatStatusPending,
+			RunGeneration: 1,
+			MCPServerIDs:  opts.MCPServerIDs,
 			Labels: pqtype.NullRawMessage{
 				RawMessage: labelsJSON,
 				Valid:      true,
@@ -1132,11 +1136,11 @@ func (p *Server) SendMessage(
 		})
 
 		// For interrupt behavior, signal the running loop to
-		// stop. setChatWaiting publishes a status notification
-		// that the worker's control subscriber detects, causing
-		// it to cancel with ErrInterrupted. The deferred cleanup
-		// in processChat then auto-promotes the queued message
-		// after persisting the partial assistant response.
+		// stop. setChatWaiting publishes a worker-scoped control
+		// message so the active run cancels with ErrInterrupted.
+		// The deferred cleanup in processChat then auto-promotes
+		// the queued message after persisting the partial
+		// assistant response.
 		if busyBehavior == SendMessageBusyBehaviorInterrupt {
 			updatedChat, err := p.setChatWaiting(ctx, opts.ChatID)
 			if err != nil {
@@ -1210,7 +1214,12 @@ func (p *Server) EditMessage(
 		return EditMessageResult{}, xerrors.Errorf("marshal message content: %w", err)
 	}
 
-	var result EditMessageResult
+	var (
+		result          EditMessageResult
+		controlWorkerID uuid.UUID
+		controlMsg      coderdpubsub.ChatControlMessage
+		publishControl  bool
+	)
 	txErr := p.db.InTx(func(tx database.Store) error {
 		lockedChat, err := tx.GetChatByIDForUpdate(ctx, opts.ChatID)
 		if err != nil {
@@ -1272,7 +1281,7 @@ func (p *Server) EditMessage(
 		if err != nil {
 			return xerrors.Errorf("delete queued messages: %w", err)
 		}
-		updatedChat, err := tx.UpdateChatStatus(ctx, database.UpdateChatStatusParams{
+		updatedChat, err := tx.AdvanceChatRunGenerationAndUpdateStatus(ctx, database.AdvanceChatRunGenerationAndUpdateStatusParams{
 			ID:          opts.ChatID,
 			Status:      database.ChatStatusPending,
 			WorkerID:    uuid.NullUUID{},
@@ -1284,12 +1293,20 @@ func (p *Server) EditMessage(
 			return xerrors.Errorf("set chat pending: %w", err)
 		}
 
+		controlWorkerID, controlMsg, publishControl = controlMessageForWorker(
+			lockedChat,
+			updatedChat.RunGeneration,
+			coderdpubsub.ChatControlReasonRestart,
+		)
 		result.Message = newMessage
 		result.Chat = updatedChat
 		return nil
 	}, nil)
 	if txErr != nil {
 		return EditMessageResult{}, txErr
+	}
+	if publishControl {
+		p.publishChatControl(controlWorkerID, controlMsg)
 	}
 
 	p.publishEditedMessage(opts.ChatID, result.Message)
@@ -1316,9 +1333,14 @@ func (p *Server) ArchiveChat(ctx context.Context, chat database.Chat) error {
 		return xerrors.New("chat_id is required")
 	}
 
-	statusChat := chat
-	interrupted := false
-	var archivedChats []database.Chat
+	var (
+		statusChat      = chat
+		interrupted     bool
+		archivedChats   []database.Chat
+		controlWorkerID uuid.UUID
+		controlMsg      coderdpubsub.ChatControlMessage
+		publishControl  bool
+	)
 	if err := p.db.InTx(func(tx database.Store) error {
 		lockedChat, err := tx.GetChatByIDForUpdate(ctx, chat.ID)
 		if err != nil {
@@ -1341,6 +1363,11 @@ func (p *Server) ArchiveChat(ctx context.Context, chat database.Chat) error {
 			if err != nil {
 				return xerrors.Errorf("set chat waiting before archive: %w", err)
 			}
+			controlWorkerID, controlMsg, publishControl = controlMessageForWorker(
+				lockedChat,
+				statusChat.RunGeneration,
+				coderdpubsub.ChatControlReasonArchive,
+			)
 			interrupted = true
 		}
 
@@ -1354,6 +1381,9 @@ func (p *Server) ArchiveChat(ctx context.Context, chat database.Chat) error {
 	}
 
 	if interrupted {
+		if publishControl {
+			p.publishChatControl(controlWorkerID, controlMsg)
+		}
 		p.publishStatus(chat.ID, statusChat.Status, statusChat.WorkerID)
 		p.publishChatPubsubEvent(statusChat, codersdk.ChatWatchEventKindStatusChange, nil)
 	}
@@ -1607,7 +1637,13 @@ func (p *Server) SubmitToolResults(
 	// The GetLastChatMessageByRole lookup and all subsequent
 	// validation and persistence run inside a single transaction
 	// so the assistant message cannot change between reads.
-	var statusConflict *ToolResultStatusConflictError
+	var (
+		statusConflict  *ToolResultStatusConflictError
+		updatedChat     database.Chat
+		controlWorkerID uuid.UUID
+		controlMsg      coderdpubsub.ChatControlMessage
+		publishControl  bool
+	)
 	txErr := p.db.InTx(func(tx database.Store) error {
 		// Authoritative status check under row lock.
 		locked, lockErr := tx.GetChatByIDForUpdate(ctx, opts.ChatID)
@@ -1761,22 +1797,33 @@ func (p *Server) SubmitToolResults(
 		}
 
 		// Transition chat to pending.
-		if _, updateErr := tx.UpdateChatStatus(ctx, database.UpdateChatStatusParams{
+		updatedChat, err = tx.AdvanceChatRunGenerationAndUpdateStatus(ctx, database.AdvanceChatRunGenerationAndUpdateStatusParams{
 			ID:          opts.ChatID,
 			Status:      database.ChatStatusPending,
 			WorkerID:    uuid.NullUUID{},
 			StartedAt:   sql.NullTime{},
 			HeartbeatAt: sql.NullTime{},
 			LastError:   sql.NullString{},
-		}); updateErr != nil {
-			return xerrors.Errorf("update chat status: %w", updateErr)
+		})
+		if err != nil {
+			return xerrors.Errorf("update chat status: %w", err)
 		}
+		controlWorkerID, controlMsg, publishControl = controlMessageForWorker(
+			locked,
+			updatedChat.RunGeneration,
+			coderdpubsub.ChatControlReasonRestart,
+		)
 
 		return nil
 	}, nil)
 	if txErr != nil {
 		return txErr
 	}
+	if publishControl {
+		p.publishChatControl(controlWorkerID, controlMsg)
+	}
+	p.publishStatus(opts.ChatID, updatedChat.Status, updatedChat.WorkerID)
+	p.publishChatPubsubEvent(updatedChat, coderdpubsub.ChatEventKindStatusChange, nil)
 
 	// Wake the chatd run loop so it processes the chat immediately.
 	p.signalWake()
@@ -2318,7 +2365,12 @@ func (p *Server) RefreshStatus(ctx context.Context, chatID uuid.UUID) error {
 }
 
 func (p *Server) setChatWaiting(ctx context.Context, chatID uuid.UUID) (database.Chat, error) {
-	var updatedChat database.Chat
+	var (
+		updatedChat     database.Chat
+		controlWorkerID uuid.UUID
+		controlMsg      coderdpubsub.ChatControlMessage
+		publishControl  bool
+	)
 	err := p.db.InTx(func(tx database.Store) error {
 		locked, lockErr := tx.GetChatByIDForUpdate(ctx, chatID)
 		if lockErr != nil {
@@ -2341,10 +2393,21 @@ func (p *Server) setChatWaiting(ctx context.Context, chatID uuid.UUID) (database
 			HeartbeatAt: sql.NullTime{},
 			LastError:   sql.NullString{},
 		})
-		return updateErr
+		if updateErr != nil {
+			return updateErr
+		}
+		controlWorkerID, controlMsg, publishControl = controlMessageForWorker(
+			locked,
+			updatedChat.RunGeneration,
+			coderdpubsub.ChatControlReasonInterrupt,
+		)
+		return nil
 	}, nil)
 	if err != nil {
 		return database.Chat{}, err
+	}
+	if publishControl {
+		p.publishChatControl(controlWorkerID, controlMsg)
 	}
 	p.publishStatus(chatID, updatedChat.Status, updatedChat.WorkerID)
 	p.publishChatPubsubEvent(updatedChat, codersdk.ChatWatchEventKindStatusChange, nil)
@@ -2646,7 +2709,7 @@ func insertUserMessageAndSetPending(
 		return message, lockedChat, nil
 	}
 
-	updatedChat, err := store.UpdateChatStatus(ctx, database.UpdateChatStatusParams{
+	updatedChat, err := store.AdvanceChatRunGenerationAndUpdateStatus(ctx, database.AdvanceChatRunGenerationAndUpdateStatusParams{
 		ID:          lockedChat.ID,
 		Status:      database.ChatStatusPending,
 		WorkerID:    uuid.NullUUID{},
@@ -2786,6 +2849,7 @@ func New(cfg Config) *Server {
 		}
 		p.configCacheUnsubscribe = cancelConfigSub
 	}
+	p.controlUnsubscribe = p.subscribeWorkerControl(ctx)
 	go p.start(ctx)
 
 	return p
@@ -2874,7 +2938,7 @@ func (p *Server) processOnce(ctx context.Context) {
 			context.WithoutCancel(ctx), 10*time.Second,
 		)
 		for _, chat := range chats {
-			_, updateErr := p.db.UpdateChatStatus(releaseCtx, database.UpdateChatStatusParams{
+			_, updateErr := p.db.AdvanceChatRunGenerationAndUpdateStatus(releaseCtx, database.AdvanceChatRunGenerationAndUpdateStatusParams{
 				ID:          chat.ID,
 				Status:      database.ChatStatusPending,
 				WorkerID:    uuid.NullUUID{},
@@ -3120,16 +3184,22 @@ func (p *Server) heartbeatTick(ctx context.Context) {
 		return
 	}
 
-	// Collect the IDs we believe we own.
-	ids := slices.Collect(maps.Keys(snapshot))
+	// Collect the IDs and generations we believe we own.
+	ids := make([]uuid.UUID, 0, len(snapshot))
+	runGenerations := make([]int64, 0, len(snapshot))
+	for id, entry := range snapshot {
+		ids = append(ids, id)
+		runGenerations = append(runGenerations, entry.runGeneration)
+	}
 
 	//nolint:gocritic // AsChatd provides narrowly-scoped daemon
 	// access for batch-updating heartbeats.
 	chatdCtx := dbauthz.AsChatd(ctx)
 	updatedIDs, err := p.db.UpdateChatHeartbeats(chatdCtx, database.UpdateChatHeartbeatsParams{
-		IDs:      ids,
-		WorkerID: p.workerID,
-		Now:      p.clock.Now(),
+		IDs:            ids,
+		RunGenerations: runGenerations,
+		WorkerID:       p.workerID,
+		Now:            p.clock.Now(),
 	})
 	if err != nil {
 		p.logger.Error(ctx, "batch heartbeat failed", slog.Error(err))
@@ -3190,7 +3260,7 @@ func (p *Server) Subscribe(
 	var allCancels []func()
 	allCancels = append(allCancels, localCancel)
 
-	// Subscribe to pubsub for durable and structured control
+	// Subscribe to pubsub for durable and structured stream
 	// events (status, messages, queue updates, retry, errors).
 	// When pubsub is nil (e.g. in-memory
 	// single-instance) we skip this and deliver all local events.
@@ -3846,62 +3916,110 @@ func (p *Server) publishMessagePart(chatID uuid.UUID, role codersdk.ChatMessageR
 	})
 }
 
-func shouldCancelChatFromControlNotification(
-	notify coderdpubsub.ChatStreamNotifyMessage,
-	workerID uuid.UUID,
-) bool {
-	status := database.ChatStatus(strings.TrimSpace(notify.Status))
-	switch status {
-	case database.ChatStatusWaiting, database.ChatStatusPending, database.ChatStatusError:
+func controlMessageForWorker(
+	chat database.Chat,
+	runGeneration int64,
+	reason coderdpubsub.ChatControlReason,
+) (uuid.UUID, coderdpubsub.ChatControlMessage, bool) {
+	if !chat.WorkerID.Valid {
+		return uuid.Nil, coderdpubsub.ChatControlMessage{}, false
+	}
+	return chat.WorkerID.UUID, coderdpubsub.ChatControlMessage{
+		ChatID:        chat.ID,
+		RunGeneration: runGeneration,
+		Reason:        reason,
+	}, true
+}
+
+func interruptsCurrentRun(reason coderdpubsub.ChatControlReason) bool {
+	switch reason {
+	case coderdpubsub.ChatControlReasonInterrupt, coderdpubsub.ChatControlReasonArchive:
 		return true
-	case database.ChatStatusRunning:
-		worker := strings.TrimSpace(notify.WorkerID)
-		if worker == "" {
-			return false
-		}
-		notifyWorkerID, err := uuid.Parse(worker)
-		if err != nil {
-			return false
-		}
-		return notifyWorkerID != workerID
 	default:
 		return false
 	}
 }
 
-func (p *Server) subscribeChatControl(
-	ctx context.Context,
-	chatID uuid.UUID,
-	cancel context.CancelCauseFunc,
-	logger slog.Logger,
-) func() {
+func shouldInterruptActiveRunFromControlMessage(
+	entry *heartbeatEntry,
+	msg coderdpubsub.ChatControlMessage,
+) bool {
+	if entry == nil || msg.ChatID != entry.chatID {
+		return false
+	}
+	if msg.RunGeneration > entry.runGeneration {
+		return true
+	}
+	return msg.RunGeneration == entry.runGeneration && interruptsCurrentRun(msg.Reason)
+}
+
+func (p *Server) handleChatControlMessage(ctx context.Context, msg coderdpubsub.ChatControlMessage) {
+	if msg.ChatID == uuid.Nil {
+		return
+	}
+
+	p.heartbeatMu.Lock()
+	entry := p.heartbeatRegistry[msg.ChatID]
+	p.heartbeatMu.Unlock()
+	if !shouldInterruptActiveRunFromControlMessage(entry, msg) {
+		return
+	}
+
+	entry.logger.Info(ctx, "interrupting active run from control message",
+		slog.F("reason", msg.Reason),
+		slog.F("incoming_run_generation", msg.RunGeneration),
+		slog.F("local_run_generation", entry.runGeneration),
+	)
+	entry.cancelWithCause(chatloop.ErrInterrupted)
+}
+
+func (p *Server) publishChatControl(workerID uuid.UUID, msg coderdpubsub.ChatControlMessage) {
+	if workerID == uuid.Nil {
+		return
+	}
+	if workerID == p.workerID {
+		p.handleChatControlMessage(context.Background(), msg)
+		return
+	}
+	if p.pubsub == nil {
+		return
+	}
+
+	payload, err := json.Marshal(msg)
+	if err != nil {
+		p.logger.Error(context.Background(), "failed to marshal chat control message",
+			slog.F("chat_id", msg.ChatID),
+			slog.F("worker_id", workerID),
+			slog.Error(err),
+		)
+		return
+	}
+	if err := p.pubsub.Publish(coderdpubsub.ChatControlChannel(workerID), payload); err != nil {
+		p.logger.Error(context.Background(), "failed to publish chat control message",
+			slog.F("chat_id", msg.ChatID),
+			slog.F("worker_id", workerID),
+			slog.Error(err),
+		)
+	}
+}
+
+func (p *Server) subscribeWorkerControl(ctx context.Context) func() {
 	if p.pubsub == nil {
 		return nil
 	}
 
-	listener := func(_ context.Context, message []byte, err error) {
-		if err != nil {
-			logger.Warn(ctx, "chat control pubsub error", slog.Error(err))
-			return
-		}
-
-		var notify coderdpubsub.ChatStreamNotifyMessage
-		if unmarshalErr := json.Unmarshal(message, &notify); unmarshalErr != nil {
-			logger.Warn(ctx, "failed to unmarshal chat control notify", slog.Error(unmarshalErr))
-			return
-		}
-
-		if shouldCancelChatFromControlNotification(notify, p.workerID) {
-			cancel(chatloop.ErrInterrupted)
-		}
-	}
-
 	controlCancel, err := p.pubsub.SubscribeWithErr(
-		coderdpubsub.ChatStreamNotifyChannel(chatID),
-		listener,
+		coderdpubsub.ChatControlChannel(p.workerID),
+		coderdpubsub.HandleChatControl(func(ctx context.Context, msg coderdpubsub.ChatControlMessage, err error) {
+			if err != nil {
+				p.logger.Warn(ctx, "chat control pubsub error", slog.Error(err))
+				return
+			}
+			p.handleChatControlMessage(ctx, msg)
+		}),
 	)
 	if err != nil {
-		logger.Warn(ctx, "failed to subscribe to chat control notifications", slog.Error(err))
+		p.logger.Error(ctx, "failed to subscribe to worker chat controls", slog.Error(err))
 		return nil
 	}
 	return controlCancel
@@ -4023,37 +4141,27 @@ func (p *Server) trackWorkspaceUsage(
 	return wsID
 }
 
+func (p *Server) shouldStartOwnedRun(ctx context.Context, chat database.Chat) bool {
+	latest, err := p.db.GetChatByID(ctx, chat.ID)
+	if err != nil {
+		p.logger.Warn(ctx, "failed to verify chat ownership before start",
+			slog.F("chat_id", chat.ID),
+			slog.Error(err),
+		)
+		return true
+	}
+	return latest.RunGeneration == chat.RunGeneration &&
+		latest.Status == database.ChatStatusRunning &&
+		latest.WorkerID.Valid &&
+		latest.WorkerID.UUID == p.workerID
+}
+
 func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 	logger := p.logger.With(slog.F("chat_id", chat.ID))
 	logger.Info(ctx, "processing chat request")
 
 	chatCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-
-	// Gate the control subscriber behind a channel that is closed
-	// after we publish "running" status. This prevents stale
-	// pubsub notifications (e.g. the "pending" notification from
-	// SendMessage that triggered this processing) from
-	// interrupting us before we start work. Due to async
-	// PostgreSQL NOTIFY delivery, a notification published before
-	// subscribeChatControl registers its queue can still arrive
-	// after registration.
-	controlArmed := make(chan struct{})
-	gatedCancel := func(cause error) {
-		select {
-		case <-controlArmed:
-			cancel(cause)
-		default:
-			logger.Debug(ctx, "ignoring control notification before armed")
-		}
-	}
-
-	controlCancel := p.subscribeChatControl(chatCtx, chat.ID, gatedCancel, logger)
-	defer func() {
-		if controlCancel != nil {
-			controlCancel()
-		}
-	}()
 
 	// Register with the centralized heartbeat loop instead of
 	// running a per-chat goroutine. The loop issues a single batch
@@ -4062,10 +4170,22 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 	p.registerHeartbeat(&heartbeatEntry{
 		cancelWithCause: cancel,
 		chatID:          chat.ID,
+		runGeneration:   chat.RunGeneration,
 		workspaceID:     chat.WorkspaceID,
 		logger:          logger,
 	})
 	defer p.unregisterHeartbeat(chat.ID)
+
+	// Re-check ownership after registration so a mutation that won the
+	// race against AcquireChats cannot start work simply because its
+	// control message arrived before the local run was registered.
+	if !p.shouldStartOwnedRun(context.WithoutCancel(chatCtx), chat) {
+		logger.Info(ctx, "chat no longer owned before processing start",
+			slog.F("run_generation", chat.RunGeneration),
+		)
+		cancel(chatloop.ErrInterrupted)
+		return
+	}
 
 	// Start buffering stream events BEFORE publishing the running
 	// status. This closes a race where a subscriber sees
@@ -4097,12 +4217,6 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 		UUID:  p.workerID,
 		Valid: true,
 	})
-
-	// Arm the control subscriber. Closing the channel is a
-	// happens-before guarantee in the Go memory model — any
-	// notification dispatched after this point will correctly
-	// interrupt processing.
-	close(controlArmed)
 
 	// Determine the final status and last error to set when we're done.
 	status := database.ChatStatusWaiting
@@ -4145,21 +4259,26 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 				return xerrors.Errorf("lock chat for release: %w", lockErr)
 			}
 
-			// If another worker has already acquired this chat,
-			// bail out — we must not overwrite their running
-			// status or publish spurious events.
+			// If a newer run generation or another worker already owns
+			// this chat, bail out — we must not overwrite their status
+			// or publish spurious side effects.
+			if latestChat.RunGeneration != chat.RunGeneration {
+				return errChatSuperseded
+			}
 			if latestChat.Status == database.ChatStatusRunning &&
 				latestChat.WorkerID.Valid &&
 				latestChat.WorkerID.UUID != p.workerID {
-				return errChatTakenByOtherWorker
+				return errChatSuperseded
 			}
 
 			// If someone else already set the chat to pending (e.g.
-			// the promote endpoint), don't overwrite it — just clear
-			// the worker and let the processor pick it back up.
+			// during a transition from older code), don't overwrite it.
 			if latestChat.Status == database.ChatStatusPending {
-				status = database.ChatStatusPending
-			} else if status == database.ChatStatusWaiting && !latestChat.Archived {
+				status = latestChat.Status
+				updatedChat = latestChat
+				return nil
+			}
+			if status == database.ChatStatusWaiting && !latestChat.Archived {
 				// Queued messages were already admitted through SendMessage,
 				// so auto-promotion only preserves FIFO order here. Archived
 				// chats skip promotion so archiving behaves like a hard stop.
@@ -4173,20 +4292,31 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 			}
 
 			var updateErr error
-			updatedChat, updateErr = tx.UpdateChatStatus(cleanupCtx, database.UpdateChatStatusParams{
-				ID:          chat.ID,
-				Status:      status,
-				WorkerID:    uuid.NullUUID{},
-				StartedAt:   sql.NullTime{},
-				HeartbeatAt: sql.NullTime{},
-				LastError:   sql.NullString{String: lastError, Valid: lastError != ""},
-			})
+			if status == database.ChatStatusPending {
+				updatedChat, updateErr = tx.AdvanceChatRunGenerationAndUpdateStatus(cleanupCtx, database.AdvanceChatRunGenerationAndUpdateStatusParams{
+					ID:          chat.ID,
+					Status:      status,
+					WorkerID:    uuid.NullUUID{},
+					StartedAt:   sql.NullTime{},
+					HeartbeatAt: sql.NullTime{},
+					LastError:   sql.NullString{String: lastError, Valid: lastError != ""},
+				})
+			} else {
+				updatedChat, updateErr = tx.UpdateChatStatus(cleanupCtx, database.UpdateChatStatusParams{
+					ID:          chat.ID,
+					Status:      status,
+					WorkerID:    uuid.NullUUID{},
+					StartedAt:   sql.NullTime{},
+					HeartbeatAt: sql.NullTime{},
+					LastError:   sql.NullString{String: lastError, Valid: lastError != ""},
+				})
+			}
 			return updateErr
 		}, nil)
-		if errors.Is(err, errChatTakenByOtherWorker) {
-			// Another worker owns this chat now — skip all
-			// post-TX side effects (status publish, pubsub,
-			// web push) to avoid overwriting their state.
+		if errors.Is(err, errChatSuperseded) {
+			// A newer run owns this chat now — skip all post-TX side
+			// effects (status publish, pubsub, web push) to avoid
+			// overwriting their state.
 			return
 		}
 		if err != nil {
@@ -4800,12 +4930,16 @@ func (p *Server) runChat(
 			// already been cleared but we still want to persist
 			// the partial assistant response. We allow the write
 			// because the history has NOT been truncated — the
-			// user simply asked to stop. In contrast, EditMessage
-			// sets the chat to "pending" after truncating, so the
-			// pending check still correctly blocks stale writes.
+			// user simply asked to stop. In contrast, generation-
+			// advancing transitions such as EditMessage move the
+			// chat to a newer run generation, which blocks stale
+			// writes even if the old worker is still draining.
 			lockedChat, lockErr := tx.GetChatByIDForUpdate(persistCtx, chat.ID)
 			if lockErr != nil {
 				return xerrors.Errorf("lock chat for persist: %w", lockErr)
+			}
+			if lockedChat.RunGeneration != chat.RunGeneration {
+				return chatloop.ErrInterrupted
 			}
 			if !lockedChat.WorkerID.Valid || lockedChat.WorkerID.UUID != p.workerID {
 				// The worker_id was cleared. Only allow the persist
@@ -5923,6 +6057,12 @@ func (p *Server) recoverStaleChats(ctx context.Context) {
 		// between GetStaleChats (a bare SELECT) and here, the chat's
 		// heartbeat may have been refreshed. We re-check freshness
 		// under the row lock before resetting.
+		var (
+			updatedChat     database.Chat
+			controlWorkerID uuid.UUID
+			controlMsg      coderdpubsub.ChatControlMessage
+			publishControl  bool
+		)
 		err := p.db.InTx(func(tx database.Store) error {
 			locked, lockErr := tx.GetChatByIDForUpdate(ctx, chat.ID)
 			if lockErr != nil {
@@ -5989,7 +6129,8 @@ func (p *Server) recoverStaleChats(ctx context.Context) {
 
 			// Reset so any replica can pick it up (pending) or
 			// the client sees the failure (error).
-			_, updateErr := tx.UpdateChatStatus(ctx, database.UpdateChatStatusParams{
+			var updateErr error
+			updatedChat, updateErr = tx.AdvanceChatRunGenerationAndUpdateStatus(ctx, database.AdvanceChatRunGenerationAndUpdateStatusParams{
 				ID:          chat.ID,
 				Status:      recoverStatus,
 				WorkerID:    uuid.NullUUID{},
@@ -6000,13 +6141,24 @@ func (p *Server) recoverStaleChats(ctx context.Context) {
 			if updateErr != nil {
 				return updateErr
 			}
+			controlWorkerID, controlMsg, publishControl = controlMessageForWorker(
+				locked,
+				updatedChat.RunGeneration,
+				coderdpubsub.ChatControlReasonRecoverStale,
+			)
 			recovered++
 			return nil
 		}, nil)
 		if err != nil {
 			p.logger.Error(ctx, "failed to recover stale chat",
 				slog.F("chat_id", chat.ID), slog.Error(err))
+			continue
 		}
+		if publishControl {
+			p.publishChatControl(controlWorkerID, controlMsg)
+		}
+		p.publishStatus(updatedChat.ID, updatedChat.Status, updatedChat.WorkerID)
+		p.publishChatPubsubEvent(updatedChat, coderdpubsub.ChatEventKindStatusChange, nil)
 	}
 
 	if recovered > 0 {
@@ -6210,6 +6362,10 @@ func (p *Server) dispatchPush(
 func (p *Server) Close() error {
 	if unsub := p.configCacheUnsubscribe; unsub != nil {
 		p.configCacheUnsubscribe = nil
+		unsub()
+	}
+	if unsub := p.controlUnsubscribe; unsub != nil {
+		p.controlUnsubscribe = nil
 		unsub()
 	}
 	p.cancel()

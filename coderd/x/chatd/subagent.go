@@ -470,6 +470,7 @@ func (p *Server) createChildSubagentChatWithOptions(
 			Title:             title,
 			Mode:              opts.chatMode,
 			Status:            database.ChatStatusPending,
+			RunGeneration:     1,
 			MCPServerIDs:      mcpServerIDs,
 			Labels: pqtype.NullRawMessage{
 				RawMessage: labelsJSON,
