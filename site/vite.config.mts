@@ -165,7 +165,6 @@ export default defineConfig({
 			"@mui/material/CardActionArea",
 			"@mui/material/CardContent",
 			"@mui/material/Checkbox",
-			"@mui/material/CircularProgress",
 			"@mui/material/Collapse",
 			"@mui/material/CssBaseline",
 			"@mui/material/Dialog",
