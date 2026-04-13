@@ -4247,6 +4247,8 @@ type Chat struct {
 	LastInjectedContext pqtype.NullRawMessage `db:"last_injected_context" json:"last_injected_context"`
 	DynamicTools        pqtype.NullRawMessage `db:"dynamic_tools" json:"dynamic_tools"`
 	OrganizationID      uuid.UUID             `db:"organization_id" json:"organization_id"`
+	AncestorChatID      uuid.NullUUID         `db:"ancestor_chat_id" json:"ancestor_chat_id"`
+	AncestorMessageID   sql.NullInt64         `db:"ancestor_message_id" json:"ancestor_message_id"`
 }
 
 type ChatDebugRun struct {

@@ -62,6 +62,8 @@ type Chat struct {
 	AgentID           *uuid.UUID         `json:"agent_id,omitempty" format:"uuid"`
 	ParentChatID      *uuid.UUID         `json:"parent_chat_id,omitempty" format:"uuid"`
 	RootChatID        *uuid.UUID         `json:"root_chat_id,omitempty" format:"uuid"`
+	AncestorChatID    *uuid.UUID         `json:"ancestor_chat_id,omitempty" format:"uuid"`
+	AncestorMessageID *int64             `json:"ancestor_message_id,omitempty"`
 	LastModelConfigID uuid.UUID          `json:"last_model_config_id" format:"uuid"`
 	Title             string             `json:"title"`
 	Status            ChatStatus         `json:"status"`
@@ -410,6 +412,11 @@ type UpdateChatRequest struct {
 	//   value is clamped to [1, pinned_count].
 	PinOrder *int32             `json:"pin_order,omitempty"`
 	Labels   *map[string]string `json:"labels,omitempty"`
+}
+
+// ForkChatRequest is the request to fork a chat at a specific message.
+type ForkChatRequest struct {
+	MessageID int64 `json:"message_id"`
 }
 
 // ChatBusyBehavior controls what happens when a user sends a message

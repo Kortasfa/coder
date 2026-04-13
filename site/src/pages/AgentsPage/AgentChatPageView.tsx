@@ -88,6 +88,7 @@ interface AgentChatPageViewProps {
 	organizationId: string | undefined;
 	chatTitle: string | undefined;
 	parentChat: TypesGen.Chat | undefined;
+	ancestorChat?: TypesGen.Chat;
 	persistedError: ChatDetailError | undefined;
 	isArchived: boolean;
 	workspaceAgent?: TypesGen.WorkspaceAgent;
@@ -172,6 +173,9 @@ interface AgentChatPageViewProps {
 	// Desktop chat ID (optional).
 	desktopChatId?: string;
 
+	// Fork handler.
+	onForkFromMessage?: (messageId: number) => void;
+
 	lastInjectedContext?: readonly TypesGen.ChatMessagePart[];
 }
 
@@ -180,6 +184,7 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 	organizationId,
 	chatTitle,
 	parentChat,
+	ancestorChat,
 	persistedError,
 	isArchived,
 	workspaceAgent,
@@ -232,6 +237,7 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 	onMCPSelectionChange,
 	onMCPAuthComplete,
 	desktopChatId,
+	onForkFromMessage,
 	lastInjectedContext,
 }) => {
 	const queryClient = useQueryClient();
@@ -352,6 +358,7 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 							<ChatTopBar
 								chatTitle={chatTitle}
 								parentChat={parentChat}
+								ancestorChat={ancestorChat}
 								panel={{
 									showSidebarPanel,
 									onToggleSidebar: () => onSetShowSidebarPanel((prev) => !prev),
@@ -411,10 +418,11 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 									store={store}
 									persistedError={persistedError}
 									onEditUserMessage={editing.handleEditUserMessage}
+									onForkFromMessage={onForkFromMessage}
 									editingMessageId={editing.editingMessageId}
 									urlTransform={urlTransform}
 									mcpServers={mcpServers}
-								/>
+								/>{" "}
 							</div>
 						</ChatScrollContainer>
 						<div className="shrink-0 overflow-y-auto px-4 pb-4 md:pb-0 [scrollbar-gutter:stable] [scrollbar-width:thin]">

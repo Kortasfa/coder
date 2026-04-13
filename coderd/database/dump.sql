@@ -1470,7 +1470,9 @@ CREATE TABLE chats (
     last_read_message_id bigint,
     last_injected_context jsonb,
     dynamic_tools jsonb,
-    organization_id uuid NOT NULL
+    organization_id uuid NOT NULL,
+    ancestor_chat_id uuid,
+    ancestor_message_id bigint
 );
 
 CREATE TABLE connection_logs (
@@ -4164,6 +4166,9 @@ ALTER TABLE ONLY chat_queued_messages
 
 ALTER TABLE ONLY chats
     ADD CONSTRAINT chats_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES workspace_agents(id) ON DELETE SET NULL;
+
+ALTER TABLE ONLY chats
+    ADD CONSTRAINT chats_ancestor_chat_id_fkey FOREIGN KEY (ancestor_chat_id) REFERENCES chats(id) ON DELETE SET NULL;
 
 ALTER TABLE ONLY chats
     ADD CONSTRAINT chats_build_id_fkey FOREIGN KEY (build_id) REFERENCES workspace_builds(id) ON DELETE SET NULL;

@@ -6,6 +6,7 @@ import {
 	CopyIcon,
 	EllipsisIcon,
 	ExternalLinkIcon,
+	GitForkIcon,
 	MonitorIcon,
 	PanelLeftIcon,
 	PanelRightCloseIcon,
@@ -50,6 +51,7 @@ interface WorkspaceActions {
 type ChatTopBarProps = {
 	chatTitle?: string;
 	parentChat?: TypesGen.Chat;
+	ancestorChat?: TypesGen.Chat;
 	panel: SidebarPanelState;
 	workspace: WorkspaceActions;
 	onArchiveAgent: () => void;
@@ -68,6 +70,7 @@ type ChatTopBarProps = {
 export const ChatTopBar: FC<ChatTopBarProps> = ({
 	chatTitle,
 	parentChat,
+	ancestorChat,
 	panel,
 	workspace,
 	onArchiveAgent,
@@ -129,6 +132,22 @@ export const ChatTopBar: FC<ChatTopBarProps> = ({
 						aria-busy={isRegeneratingTitle}
 						className="flex min-w-0 items-center gap-1.5"
 					>
+						{ancestorChat && (
+							<>
+								<Button
+									asChild
+									size="sm"
+									variant="subtle"
+									className="h-auto max-w-[16rem] rounded-sm px-1 py-0.5 text-sm text-content-secondary shadow-none hover:bg-transparent hover:text-content-primary"
+								>
+									<Link to={`/agents/${ancestorChat.id}`}>
+										<GitForkIcon className="mr-1 inline-block h-3 w-3 shrink-0" />
+										<span className="truncate">{ancestorChat.title}</span>
+									</Link>
+								</Button>
+								<ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-content-secondary/70 -ml-0.5" />
+							</>
+						)}
 						{parentChat && (
 							<>
 								<Button

@@ -46,6 +46,7 @@ interface ChatPageTimelineProps {
 		text: string,
 		fileBlocks?: readonly TypesGen.ChatMessagePart[],
 	) => void;
+	onForkFromMessage?: (messageId: number) => void;
 	editingMessageId?: number | null;
 	urlTransform?: UrlTransform;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
@@ -56,6 +57,7 @@ export const ChatPageTimeline: FC<ChatPageTimelineProps> = ({
 	store,
 	persistedError,
 	onEditUserMessage,
+	onForkFromMessage,
 	editingMessageId,
 	urlTransform,
 	mcpServers,
@@ -96,6 +98,7 @@ export const ChatPageTimeline: FC<ChatPageTimelineProps> = ({
 					parsedMessages={parsedMessages}
 					subagentTitles={subagentTitles}
 					onEditUserMessage={onEditUserMessage}
+					onForkFromMessage={onForkFromMessage}
 					editingMessageId={editingMessageId}
 					urlTransform={urlTransform}
 					mcpServers={mcpServers}

@@ -1,4 +1,11 @@
-import { type FC, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+	type FC,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
 
 import {
 	useInfiniteQuery,
@@ -6,7 +13,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "react-query";
-import { useOutletContext, useParams } from "react-router";
+import { useNavigate, useOutletContext, useParams } from "react-router";
 import { toast } from "sonner";
 import type { UrlTransform } from "streamdown";
 import { API, watchWorkspace } from "#/api/api";
@@ -21,6 +28,7 @@ import {
 	createChatMessage,
 	deleteChatQueuedMessage,
 	editChatMessage,
+	forkChat,
 	interruptChat,
 	mcpServerConfigs,
 	promoteChatQueuedMessage,
@@ -571,6 +579,11 @@ const AgentChatPage: FC = () => {
 		...chat(parentChatID ?? ""),
 		enabled: Boolean(parentChatID),
 	});
+	const ancestorChatID = chatQuery.data?.ancestor_chat_id;
+	const ancestorChatQuery = useQuery({
+		...chat(ancestorChatID ?? ""),
+		enabled: Boolean(ancestorChatID),
+	});
 	const workspaceId = chatQuery.data?.workspace_id;
 	const workspaceQuery = useQuery({
 		...workspaceById(workspaceId ?? ""),
@@ -746,6 +759,8 @@ const AgentChatPage: FC = () => {
 	const { mutateAsync: promoteQueuedMessage } = useMutation(
 		promoteChatQueuedMessage(queryClient, agentId ?? ""),
 	);
+	const forkMutation = useMutation(forkChat(queryClient));
+	const navigate = useNavigate();
 
 	const { store, clearStreamError, upsertCacheMessages } = useChatStore({
 		chatID: agentId,
@@ -1069,6 +1084,7 @@ const AgentChatPage: FC = () => {
 	);
 
 	const parentChat = parentChatQuery.data;
+	const ancestorChat = ancestorChatQuery.data;
 	const workspaceRoute = workspace
 		? `/@${workspace.owner_name}/${workspace.name}`
 		: null;
@@ -1202,6 +1218,22 @@ const AgentChatPage: FC = () => {
 		onRegenerateTitle(agentId);
 	};
 
+	const handleForkFromMessage = useCallback(
+		async (messageId: number) => {
+			if (!agentId) return;
+			try {
+				const newChat = await forkMutation.mutateAsync({
+					chatId: agentId,
+					req: { message_id: messageId },
+				});
+				navigate(`/agents/${newChat.id}`);
+			} catch {
+				// Error is handled by React Query.
+			}
+		},
+		[agentId, forkMutation, navigate],
+	);
+
 	if (chatQuery.isLoading || chatMessagesQuery.isLoading) {
 		return (
 			<AgentChatPageLoadingView
@@ -1236,6 +1268,7 @@ const AgentChatPage: FC = () => {
 			organizationId={chatQuery.data?.organization_id}
 			chatTitle={chatTitle}
 			parentChat={parentChat}
+			ancestorChat={ancestorChat}
 			persistedError={persistedError}
 			isArchived={isArchived}
 			workspace={workspace}
@@ -1286,6 +1319,7 @@ const AgentChatPage: FC = () => {
 			isFetchingMoreMessages={chatMessagesQuery.isFetchingNextPage}
 			onFetchMoreMessages={chatMessagesQuery.fetchNextPage}
 			desktopChatId={desktopEnabled ? agentId : undefined}
+			onForkFromMessage={handleForkFromMessage}
 			mcpServers={mcpServers}
 			selectedMCPServerIds={effectiveMCPServerIds}
 			onMCPSelectionChange={handleMCPSelectionChange}
