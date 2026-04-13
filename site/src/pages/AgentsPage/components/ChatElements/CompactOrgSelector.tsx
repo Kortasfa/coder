@@ -1,6 +1,7 @@
 import { Check } from "lucide-react";
 import { type FC, useState } from "react";
 import type { Organization } from "#/api/typesGenerated";
+import { ChevronDownIcon } from "#/components/AnimatedIcons/ChevronDown";
 import { Avatar } from "#/components/Avatar/Avatar";
 import {
 	Command,
@@ -71,6 +72,10 @@ export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
 					) : (
 						<span>Select org…</span>
 					)}
+					<ChevronDownIcon
+						open={open}
+						className="size-icon-sm shrink-0 text-content-secondary transition-colors hover:text-content-primary"
+					/>
 				</button>
 			</PopoverTrigger>
 			<PopoverContent

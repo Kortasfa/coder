@@ -1064,7 +1064,7 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 										formatProviderLabel={formatProviderLabel}
 										dropdownSide="right"
 										dropdownAlign="start"
-										className="w-full justify-start [&>svg]:ml-auto"
+										className="w-full justify-start [&>svg]:ml-auto [&>svg]:-rotate-90"
 									/>{" "}
 								</DropdownMenuContent>
 							</DropdownMenu>
