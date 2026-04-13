@@ -119,7 +119,20 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 	onSubmitAnswer,
 }) => {
 	const idPrefix = useId();
-	const [answers, setAnswers] = useState<Array<QuestionAnswer | undefined>>([]);
+	const [answers, setAnswers] = useState<Array<QuestionAnswer | undefined>>(
+		() =>
+			questions.map((question) => {
+				const firstOption = question.options[0];
+				if (!firstOption) {
+					return undefined;
+				}
+				return {
+					kind: "option" as const,
+					label: firstOption.label || "Option 1",
+					optionIndex: 0,
+				};
+			}),
+	);
 	const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [submitError, setSubmitError] = useState<string | undefined>();
@@ -372,51 +385,23 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 									{questionText}
 								</p>
 							</div>
-							<RadioGroup
-								aria-labelledby={`${questionHeaderId} ${questionTextId}`}
-								className="space-y-1"
-								name={`${questionIdBase}-options`}
-								value={getSelectedValue(answer)}
-								onValueChange={(value) => {
-									handleOptionChange(questionIndex, question, value);
-								}}
-							>
-								{question.options.map((option, optionIndex) => {
-									const optionId = `${questionIdBase}-option-${optionIndex}`;
+							<div className="rounded-md border border-solid border-border-default px-3 py-1">
+								<RadioGroup
+									aria-labelledby={`${questionHeaderId} ${questionTextId}`}
+									className="space-y-1"
+									name={`${questionIdBase}-options`}
+									value={getSelectedValue(answer)}
+									onValueChange={(value) => {
+										handleOptionChange(questionIndex, question, value);
+									}}
+								>
+									{question.options.map((option, optionIndex) => {
+										const optionId = `${questionIdBase}-option-${optionIndex}`;
 
-									return (
-										<label
-											key={`${option.label}-${option.description}-${optionIndex}`}
-											htmlFor={optionId}
-											className={cn(
-												"grid gap-x-3 gap-y-0.5 py-1.5",
-												isInteractive && !isSubmitting
-													? "cursor-pointer"
-													: "cursor-default",
-											)}
-											style={{ gridTemplateColumns: "auto 1fr" }}
-										>
-											<RadioGroupItem
-												className="row-span-2 self-center"
-												disabled={!isInteractive || isSubmitting}
-												id={optionId}
-												value={`option-${optionIndex}`}
-											/>
-											<span className="text-sm font-medium text-content-primary">
-												{option.label || `Option ${optionIndex + 1}`}
-											</span>
-											<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
-												{option.description || "No description provided."}
-											</p>
-										</label>
-									);
-								})}
-								{(() => {
-									const otherOptionId = `${questionIdBase}-option-${optionCount}`;
-									return (
-										<div className="space-y-2">
+										return (
 											<label
-												htmlFor={otherOptionId}
+												key={`${option.label}-${option.description}-${optionIndex}`}
+												htmlFor={optionId}
 												className={cn(
 													"grid gap-x-3 gap-y-0.5 py-1.5",
 													isInteractive && !isSubmitting
@@ -428,37 +413,69 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 												<RadioGroupItem
 													className="row-span-2 self-center"
 													disabled={!isInteractive || isSubmitting}
-													id={otherOptionId}
-													value={OTHER_OPTION_VALUE}
+													id={optionId}
+													value={`option-${optionIndex}`}
 												/>
 												<span className="text-sm font-medium text-content-primary">
-													Other
+													{option.label || `Option ${optionIndex + 1}`}
 												</span>
 												<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
-													Share a different answer.
+													{option.description || "No description provided."}
 												</p>
 											</label>
-											{isOtherSelected && (
-												<div className="pl-7">
-													<Input
-														autoFocus={isInteractive}
-														aria-label={`Other response for ${questionHeader}`}
+										);
+									})}
+									{(() => {
+										const otherOptionId = `${questionIdBase}-option-${optionCount}`;
+										return (
+											<div className="space-y-2">
+												<label
+													htmlFor={otherOptionId}
+													className={cn(
+														"grid gap-x-3 gap-y-0.5 py-1.5",
+														isInteractive && !isSubmitting
+															? "cursor-pointer"
+															: "cursor-default",
+													)}
+													style={{ gridTemplateColumns: "auto 1fr" }}
+												>
+													<RadioGroupItem
+														className="row-span-2 self-center"
 														disabled={!isInteractive || isSubmitting}
-														placeholder="Describe another answer"
-														value={answer?.kind === "other" ? answer.text : ""}
-														onChange={(event) => {
-															setAnswerAtIndex(questionIndex, {
-																kind: "other",
-																text: event.currentTarget.value,
-															});
-														}}
+														id={otherOptionId}
+														value={OTHER_OPTION_VALUE}
 													/>
-												</div>
-											)}
-										</div>
-									);
-								})()}
-							</RadioGroup>
+													<span className="text-sm font-medium text-content-primary">
+														Other
+													</span>
+													<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
+														Share a different answer.
+													</p>
+												</label>
+												{isOtherSelected && (
+													<div className="pl-7">
+														<Input
+															autoFocus={isInteractive}
+															aria-label={`Other response for ${questionHeader}`}
+															disabled={!isInteractive || isSubmitting}
+															placeholder="Describe another answer"
+															value={
+																answer?.kind === "other" ? answer.text : ""
+															}
+															onChange={(event) => {
+																setAnswerAtIndex(questionIndex, {
+																	kind: "other",
+																	text: event.currentTarget.value,
+																});
+															}}
+														/>
+													</div>
+												)}
+											</div>
+										);
+									})()}
+								</RadioGroup>
+							</div>
 						</div>
 					);
 				})}

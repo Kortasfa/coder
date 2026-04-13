@@ -131,7 +131,7 @@ export const InteractiveSingleQuestion: Story = {
 		const canvas = within(canvasElement);
 		const submitButton = canvas.getByRole("button", { name: "Submit" });
 
-		expect(submitButton).toBeDisabled();
+		expect(submitButton).toBeEnabled();
 		expect(canvas.getAllByRole("radio")).toHaveLength(3);
 
 		await userEvent.click(
@@ -198,7 +198,7 @@ export const InteractiveWizardStep: Story = {
 		const nextButton = canvas.getByRole("button", { name: "Next" });
 
 		expect(canvas.getByText("Question 1 of 2")).toBeInTheDocument();
-		expect(nextButton).toBeDisabled();
+		expect(nextButton).toBeEnabled();
 		expect(
 			canvas.queryByText(/Which rollout path should we use/i),
 		).not.toBeInTheDocument();
@@ -213,7 +213,7 @@ export const InteractiveWizardStep: Story = {
 		expect(
 			canvas.getByText(/Which rollout path should we use/i),
 		).toBeInTheDocument();
-		expect(canvas.getByRole("button", { name: "Submit" })).toBeDisabled();
+		expect(canvas.getByRole("button", { name: "Submit" })).toBeEnabled();
 	},
 };
 
@@ -251,7 +251,7 @@ export const SubmittedWizard: Story = {
 		expect(
 			canvas.queryByRole("button", { name: "Submit" }),
 		).not.toBeInTheDocument();
-		expect(canvas.getByText("Submitted answer")).toBeInTheDocument();
+		expect(canvas.getAllByText("Submitted answer")).toHaveLength(2);
 		expect(canvas.getByText("Incremental migrations")).toBeInTheDocument();
 		expect(canvas.getByText("Small beta")).toBeInTheDocument();
 	},
