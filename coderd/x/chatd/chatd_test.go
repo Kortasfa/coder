@@ -735,13 +735,14 @@ func TestTurnModePersistence(t *testing.T) {
 
 	tests := []struct {
 		name string
-		run  func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, model database.ChatModelConfig)
+		run  func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, org database.Organization, model database.ChatModelConfig)
 	}{
 		{
 			name: "CreateChatPersistsPlanTurnMode",
-			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, model database.ChatModelConfig) {
+			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, org database.Organization, model database.ChatModelConfig) {
 				chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
 					OwnerID:            user.ID,
+					OrganizationID:     org.ID,
 					Title:              "plan-mode-create",
 					ModelConfigID:      model.ID,
 					TurnMode:           "plan",
@@ -756,9 +757,10 @@ func TestTurnModePersistence(t *testing.T) {
 		},
 		{
 			name: "CreateChatDefaultsTurnModeToNull",
-			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, model database.ChatModelConfig) {
+			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, org database.Organization, model database.ChatModelConfig) {
 				chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
 					OwnerID:            user.ID,
+					OrganizationID:     org.ID,
 					Title:              "default-mode-create",
 					ModelConfigID:      model.ID,
 					InitialUserContent: []codersdk.ChatMessagePart{codersdk.ChatMessageText("hello")},
@@ -771,9 +773,10 @@ func TestTurnModePersistence(t *testing.T) {
 		},
 		{
 			name: "SendMessagePersistsPlanTurnMode",
-			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, model database.ChatModelConfig) {
+			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, org database.Organization, model database.ChatModelConfig) {
 				chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
 					OwnerID:            user.ID,
+					OrganizationID:     org.ID,
 					Title:              "send-plan-mode",
 					ModelConfigID:      model.ID,
 					InitialUserContent: []codersdk.ChatMessagePart{codersdk.ChatMessageText("hello")},
@@ -801,9 +804,10 @@ func TestTurnModePersistence(t *testing.T) {
 		},
 		{
 			name: "SendMessageQueuedPersistsPlanTurnMode",
-			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, model database.ChatModelConfig) {
+			run: func(ctx context.Context, t *testing.T, db database.Store, replica *chatd.Server, user database.User, org database.Organization, model database.ChatModelConfig) {
 				chat, err := replica.CreateChat(ctx, chatd.CreateOptions{
 					OwnerID:            user.ID,
+					OrganizationID:     org.ID,
 					Title:              "queued-plan-mode",
 					ModelConfigID:      model.ID,
 					InitialUserContent: []codersdk.ChatMessagePart{codersdk.ChatMessageText("hello")},
@@ -849,8 +853,8 @@ func TestTurnModePersistence(t *testing.T) {
 			replica := newTestServer(t, db, ps, uuid.New())
 
 			ctx := testutil.Context(t, testutil.WaitLong)
-			user, _, model := seedChatDependencies(ctx, t, db)
-			tt.run(ctx, t, db, replica, user, model)
+			user, org, model := seedChatDependencies(ctx, t, db)
+			tt.run(ctx, t, db, replica, user, org, model)
 		})
 	}
 }
