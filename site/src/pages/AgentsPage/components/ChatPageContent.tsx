@@ -70,7 +70,8 @@ export const ChatPageTimeline: FC<ChatPageTimelineProps> = ({
 	const messagesByID = useChatSelector(store, selectMessagesByID);
 	const orderedMessageIDs = useChatSelector(store, selectOrderedMessageIDs);
 	const chatStatus = useChatSelector(store, selectChatStatus);
-	const isChatCompleted = chatStatus === "completed";
+	const hasStream = useChatSelector(store, selectHasStreamState);
+	const isChatCompleted = !hasStream && chatStatus !== "pending";
 
 	const messages = orderedMessageIDs
 		.map((messageID) => {
