@@ -5,6 +5,7 @@ import {
 	draftInputStorageKeyPrefix,
 	getPersistedDraftInputValue,
 	restoreOptimisticRequestSnapshot,
+	submitEditAndScroll,
 	useConversationEditingState,
 } from "./AgentChatPage";
 import type { ChatMessageInputRef } from "./components/AgentChatInput";
@@ -746,66 +747,61 @@ describe("useConversationEditingState", () => {
 		expect(result.current.editorInitialValue).toBe("plain text draft");
 		unmount();
 	});
+});
 
-	it("awaits onSend resolution before completing an edit send", async () => {
-		// Manually-controlled promise so we can verify the hook waits
-		// for onSend to resolve before finalizing the send. This
-		// mirrors the real handleSend which does `await editMessage()`
-		// then `scrollToBottomRef.current?.()` — if the await were
-		// removed, scroll would fire while the optimistic truncation
-		// is still pending, causing sticky message cycling.
-		let resolveOnSend!: () => void;
-		const onSend = vi.fn(
-			() =>
-				new Promise<void>((resolve) => {
-					resolveOnSend = resolve;
-				}),
-		);
-		const onDeleteQueuedMessage = vi.fn().mockResolvedValue(undefined);
-		const chatInputRef = createRef<ChatMessageInputRef>();
-		const inputValueRef = { current: "" } as React.RefObject<string>;
+describe("submitEditAndScroll", () => {
+	const dummyArgs = {
+		messageId: 42,
+		req: { content: [{ type: "text" as const, text: "edited" }] },
+	};
 
-		const { result, unmount } = renderHook(() =>
-			useConversationEditingState({
-				chatID: "chat-abc-123",
-				onSend,
-				onDeleteQueuedMessage,
-				chatInputRef,
-				inputValueRef,
+	it("calls scrollToBottom after editMessage resolves", async () => {
+		const callOrder: string[] = [];
+		const editMessage = vi.fn(async () => {
+			callOrder.push("editMessage");
+		});
+		const scrollToBottom = vi.fn(() => {
+			callOrder.push("scrollToBottom");
+		});
+
+		await submitEditAndScroll({
+			editMessage,
+			editArgs: dummyArgs,
+			scrollToBottom,
+			onError: vi.fn(),
+		});
+
+		expect(callOrder).toEqual(["editMessage", "scrollToBottom"]);
+	});
+
+	it("does not call scrollToBottom when editMessage throws", async () => {
+		const scrollToBottom = vi.fn();
+		const onError = vi.fn();
+		const editMessage = vi.fn().mockRejectedValue(new Error("boom"));
+
+		await expect(
+			submitEditAndScroll({
+				editMessage,
+				editArgs: dummyArgs,
+				scrollToBottom,
+				onError,
 			}),
-		);
+		).rejects.toThrow("boom");
 
-		const mockInput = createMockChatInputHandle("edited text");
-		result.current.chatInputRef.current = mockInput.handle;
+		expect(scrollToBottom).not.toHaveBeenCalled();
+		expect(onError).toHaveBeenCalledWith(expect.any(Error));
+	});
 
-		// Enter edit mode.
-		act(() => {
-			result.current.handleEditUserMessage(7, "edited text");
-		});
-		expect(result.current.editingMessageId).toBe(7);
+	it("tolerates null scrollToBottom", async () => {
+		const editMessage = vi.fn().mockResolvedValue(undefined);
 
-		// Start the send but don't resolve onSend yet.
-		let sendCompleted = false;
-		const sendPromise = act(async () => {
-			await result.current.handleSendFromInput("edited text");
-			sendCompleted = true;
+		await submitEditAndScroll({
+			editMessage,
+			editArgs: dummyArgs,
+			scrollToBottom: null,
+			onError: vi.fn(),
 		});
 
-		// onSend was called with the edit message ID.
-		expect(onSend).toHaveBeenCalledWith("edited text", undefined, 7);
-
-		// The send flow must NOT have completed yet — onSend is
-		// still pending. This ordering is critical: handleSend
-		// awaits editMessage() before calling scrollToBottom().
-		expect(sendCompleted).toBe(false);
-
-		// Resolve onSend and let the send flow complete.
-		await act(async () => {
-			resolveOnSend();
-			await sendPromise;
-		});
-
-		expect(sendCompleted).toBe(true);
-		unmount();
+		expect(editMessage).toHaveBeenCalled();
 	});
 });

@@ -1093,6 +1093,11 @@ export const ScrollStableAfterEditTruncation: Story = {
 	decorators: scrollStoryDecorators,
 	render: () => <StoryAgentChatPageView store={editSubmitScrollStore} />,
 	play: async ({ canvasElement }) => {
+		// Reset the module-scoped store so interactive re-runs in
+		// Storybook start from the full 30-message conversation.
+		editSubmitScrollStore.replaceMessages(buildLongConversation(30));
+		editSubmitScrollStore.setChatStatus("completed");
+
 		const canvas = within(canvasElement);
 		const scrollContainer = canvas.getByTestId("scroll-container");
 

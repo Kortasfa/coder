@@ -679,12 +679,14 @@ export const editChatMessage = (queryClient: QueryClient, chatId: string) => ({
 	},
 	onSettled: () => {
 		// Refresh chat metadata (status, title, etc.). The messages
-		// query is intentionally NOT invalidated here — the per-chat
-		// WebSocket delivers the post-edit conversation via
-		// FullRefresh, same as createChatMessage. Invalidating
-		// chatMessagesKey would trigger a redundant REST refetch
-		// that causes extra store mutations while the sticky user
-		// message is settling after the optimistic truncation.
+		// query is intentionally NOT invalidated here. The per-chat
+		// WebSocket handles post-edit message delivery via
+		// FullRefresh, making REST invalidation unnecessary.
+		// Invalidating chatMessagesKey would trigger a redundant
+		// refetch that causes extra store mutations while the
+		// sticky user message is settling after the optimistic
+		// truncation.
+
 		void queryClient.invalidateQueries({
 			queryKey: chatKey(chatId),
 			exact: true,
