@@ -925,9 +925,9 @@ func TestStopAfterTool_Success(t *testing.T) {
 	t.Parallel()
 
 	streamCalls := 0
-	model := &loopTestModel{
-		provider: "fake",
-		streamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	model := &chattest.FakeModel{
+		ProviderName: "fake",
+		StreamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 			streamCalls++
 			return streamFromParts([]fantasy.StreamPart{
 				{Type: fantasy.StreamPartTypeToolInputStart, ID: "tc-plan", ToolCallName: "propose_plan"},
@@ -993,9 +993,9 @@ func TestStopAfterTool_ErrorDoesNotStop(t *testing.T) {
 	t.Parallel()
 
 	streamCalls := 0
-	model := &loopTestModel{
-		provider: "fake",
-		streamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	model := &chattest.FakeModel{
+		ProviderName: "fake",
+		StreamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 			step := streamCalls
 			streamCalls++
 
@@ -1072,9 +1072,9 @@ func TestStopAfterTool_NotInList(t *testing.T) {
 	t.Parallel()
 
 	streamCalls := 0
-	model := &loopTestModel{
-		provider: "fake",
-		streamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+	model := &chattest.FakeModel{
+		ProviderName: "fake",
+		StreamFn: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 			step := streamCalls
 			streamCalls++
 
