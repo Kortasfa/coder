@@ -3966,9 +3966,7 @@ func (p *Server) tryAutoPromoteQueuedMessage(
 	).withCreatedBy(chat.OwnerID))
 	msgs, err := insertChatMessageWithStore(ctx, tx, msgParams)
 	if err != nil {
-		logger.Error(ctx, "failed to promote queued message",
-			slog.F("queued_message_id", nextQueued.ID), slog.Error(err))
-		return nil, nil, false, nil
+		return nil, nil, false, xerrors.Errorf("promote queued message: %w", err)
 	}
 	msg := msgs[0]
 
@@ -4171,7 +4169,7 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 				var promoteErr error
 				promotedMessage, remainingQueuedMessages, shouldPublishQueueUpdate, promoteErr = p.tryAutoPromoteQueuedMessage(cleanupCtx, tx, latestChat)
 				if promoteErr != nil {
-					logger.Error(cleanupCtx, "failed to auto-promote queued message", slog.Error(promoteErr))
+					return xerrors.Errorf("auto-promote queued message: %w", promoteErr)
 				} else if promotedMessage != nil {
 					status = database.ChatStatusPending
 				}
@@ -4213,10 +4211,21 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 		}
 
 		p.publishStatus(chat.ID, status, uuid.NullUUID{})
+
+		// Wake the run loop immediately when auto-promote
+		// transitioned the chat to pending, matching every
+		// other pending-transition path (CreateChat,
+		// SendMessage, EditMessage, PromoteQueued,
+		// SubmitToolResults).
+		if status == database.ChatStatusPending {
+			p.signalWake()
+		}
+
 		// Best-effort: use any generated title captured during
 		// processing so push notifications and the status snapshot
 		// can reflect it without another DB read. The dedicated
 		// title_change event remains the source of truth.
+
 		if title, ok := generatedTitle.Load(); ok {
 			updatedChat.Title = title
 		}

@@ -1118,22 +1118,10 @@ func TestInterruptAutoPromotionIgnoresLaterUsageLimitIncrease(t *testing.T) {
 	acquireTrap := clock.Trap().NewTicker("chatd", "acquire")
 	defer acquireTrap.Close()
 
-	assertPendingWithoutQueuedMessages := func(chatID uuid.UUID) {
-		t.Helper()
-
-		queued, dbErr := db.GetChatQueuedMessages(ctx, chatID)
-		require.NoError(t, dbErr)
-		require.Empty(t, queued)
-
-		fromDB, dbErr := db.GetChatByID(ctx, chatID)
-		require.NoError(t, dbErr)
-		require.Equal(t, database.ChatStatusPending, fromDB.Status)
-		require.False(t, fromDB.WorkerID.Valid)
-	}
-
 	streamStarted := make(chan struct{})
 	interrupted := make(chan struct{})
 	secondRequestStarted := make(chan struct{})
+	secondRequestReady := make(chan struct{})
 	thirdRequestStarted := make(chan struct{})
 	allowFinish := make(chan struct{})
 	var requestCount atomic.Int32
@@ -1163,7 +1151,20 @@ func TestInterruptAutoPromotionIgnoresLaterUsageLimitIncrease(t *testing.T) {
 			}()
 			return chattest.OpenAIResponse{StreamingChunks: chunks}
 		case 2:
+			// Signal that the second request started. signalWake after
+			// auto-promote causes this to fire immediately rather than
+			// waiting for a clock advance. Block until the test has
+			// queued the next message and inserted the spend record.
 			close(secondRequestStarted)
+			chunks := make(chan chattest.OpenAIChunk, 10)
+			go func() {
+				defer close(chunks)
+				<-secondRequestReady
+				for _, chunk := range chattest.OpenAITextChunks("done") {
+					chunks <- chunk
+				}
+			}()
+			return chattest.OpenAIResponse{StreamingChunks: chunks}
 		case 3:
 			close(thirdRequestStarted)
 		}
@@ -1207,12 +1208,16 @@ func TestInterruptAutoPromotionIgnoresLaterUsageLimitIncrease(t *testing.T) {
 	testutil.TryReceive(ctx, t, interrupted)
 
 	close(allowFinish)
-	chatd.WaitUntilIdleForTest(server)
-	assertPendingWithoutQueuedMessages(chat.ID)
 
-	// Keep the acquire loop frozen here so "queued" stays pending.
-	// That makes the later send queue because the chat is still busy,
-	// rather than because the scheduler happened to be slow.
+	// signalWake after auto-promote causes the run loop to pick up
+	// the pending chat immediately, so the second request starts
+	// before any clock advance. Wait for it here.
+	testutil.TryReceive(ctx, t, secondRequestStarted)
+
+	// While the second request is running, queue another message
+	// and exhaust the usage limit. The queued message was already
+	// admitted through SendMessage, so auto-promote should still
+	// process it despite the limit increase.
 	laterQueuedResult, err := server.SendMessage(ctx, chatd.SendMessageOptions{
 		ChatID:  chat.ID,
 		Content: []codersdk.ChatMessagePart{codersdk.ChatMessageText("later queued")},
@@ -1260,12 +1265,9 @@ func TestInterruptAutoPromotionIgnoresLaterUsageLimitIncrease(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	clock.Advance(acquireInterval).MustWait(ctx)
-	testutil.TryReceive(ctx, t, secondRequestStarted)
-	chatd.WaitUntilIdleForTest(server)
-	assertPendingWithoutQueuedMessages(chat.ID)
-
-	clock.Advance(acquireInterval).MustWait(ctx)
+	// Unblock the second request so it completes and auto-promotes
+	// "later queued". signalWake triggers the third request.
+	close(secondRequestReady)
 	testutil.TryReceive(ctx, t, thirdRequestStarted)
 	chatd.WaitUntilIdleForTest(server)
 
