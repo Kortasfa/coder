@@ -1413,7 +1413,6 @@ CREATE TABLE chats (
     workspace_id uuid,
     title text DEFAULT 'New Chat'::text NOT NULL,
     status chat_status DEFAULT 'waiting'::chat_status NOT NULL,
-    run_generation bigint DEFAULT 0 NOT NULL,
     worker_id uuid,
     started_at timestamp with time zone,
     heartbeat_at timestamp with time zone,
@@ -1432,7 +1431,8 @@ CREATE TABLE chats (
     pin_order integer DEFAULT 0 NOT NULL,
     last_read_message_id bigint,
     last_injected_context jsonb,
-    dynamic_tools jsonb
+    dynamic_tools jsonb,
+    run_generation bigint DEFAULT 0 NOT NULL
 );
 
 CREATE TABLE connection_logs (
