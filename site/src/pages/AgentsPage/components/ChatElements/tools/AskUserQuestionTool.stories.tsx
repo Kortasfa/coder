@@ -86,6 +86,11 @@ const multipleQuestionsPayload = {
 	],
 };
 
+const submittedWizardResponse = [
+	"1. Implementation Approach: Incremental migrations",
+	"2. Release Plan: Small beta",
+].join("\n");
+
 const meta: Meta<typeof Tool> = {
 	title: "pages/AgentsPage/ChatElements/tools/AskUserQuestion",
 	component: Tool,
@@ -336,10 +341,7 @@ export const SubmittedWizard: Story = {
 			throw new Error("Missing ask-user-question response callback.");
 		}
 		expect(args.onSendAskUserQuestionResponse).toHaveBeenCalledWith(
-			[
-				"1. Implementation Approach: Incremental migrations",
-				"2. Release Plan: Small beta",
-			].join("\n"),
+			submittedWizardResponse,
 		);
 		expect(canvas.queryAllByRole("radio")).toHaveLength(0);
 		expect(
@@ -348,9 +350,57 @@ export const SubmittedWizard: Story = {
 		expect(
 			canvas.queryByRole("button", { name: "Submit" }),
 		).not.toBeInTheDocument();
-		expect(canvas.getAllByText("Submitted answer")).toHaveLength(2);
-		expect(canvas.getByText("Incremental migrations")).toBeInTheDocument();
-		expect(canvas.getByText("Small beta")).toBeInTheDocument();
+		const submittedAnswer = canvas.getByText("Submitted answer");
+		expect(submittedAnswer).toBeInTheDocument();
+		expect(submittedAnswer.nextElementSibling?.textContent).toBe(
+			submittedWizardResponse,
+		);
+	},
+};
+
+export const PreviouslyAnsweredSingleQuestion: Story = {
+	args: {
+		status: "completed",
+		result: JSON.stringify(singleQuestionPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: false,
+		previousResponseText: "Single migration",
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const submittedAnswer = canvas.getByText("Submitted answer");
+
+		expect(submittedAnswer.nextElementSibling?.textContent).toBe(
+			"Single migration",
+		);
+		expect(canvas.queryAllByRole("radio")).toHaveLength(0);
+		expect(
+			canvas.queryByRole("button", { name: "Submit" }),
+		).not.toBeInTheDocument();
+	},
+};
+
+export const PreviouslyAnsweredWizard: Story = {
+	args: {
+		status: "completed",
+		result: JSON.stringify(multipleQuestionsPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: false,
+		previousResponseText: submittedWizardResponse,
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const submittedAnswer = canvas.getByText("Submitted answer");
+
+		expect(canvas.getByText("Implementation Approach")).toBeInTheDocument();
+		expect(canvas.getByText("Release Plan")).toBeInTheDocument();
+		expect(submittedAnswer.nextElementSibling?.textContent).toBe(
+			submittedWizardResponse,
+		);
+		expect(canvas.queryAllByRole("radio")).toHaveLength(0);
+		expect(
+			canvas.queryByRole("button", { name: "Submit" }),
+		).not.toBeInTheDocument();
 	},
 };
 

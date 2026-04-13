@@ -30,6 +30,7 @@ type AskUserQuestionToolProps = {
 	errorMessage?: string;
 	isChatCompleted?: boolean;
 	isLatestAskUserQuestion?: boolean;
+	previousResponseText?: string;
 	onSubmitAnswer?: (message: string) => Promise<void> | void;
 };
 
@@ -116,6 +117,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 	errorMessage,
 	isChatCompleted = false,
 	isLatestAskUserQuestion = false,
+	previousResponseText,
 	onSubmitAnswer,
 }) => {
 	const idPrefix = useId();
@@ -136,11 +138,14 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 	const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
 	const [isSubmitting, setIsSubmitting] = useState(false);
 	const [submitError, setSubmitError] = useState<string | undefined>();
-	const [submittedAnswers, setSubmittedAnswers] = useState<Array<
-		QuestionAnswer | undefined
-	> | null>(null);
+	const [submittedResponseText, setSubmittedResponseText] = useState<
+		string | null
+	>(null);
 	const isRunning = status === "running";
-	const hasSubmitted = submittedAnswers !== null;
+	const displayedSubmittedResponseText =
+		previousResponseText ?? submittedResponseText;
+	const hasSubmittedResponse = displayedSubmittedResponseText != null;
+	const showSubmittedResponse = status === "completed" && hasSubmittedResponse;
 	const activeQuestionIndex = Math.min(
 		currentQuestionIndex,
 		Math.max(questions.length - 1, 0),
@@ -150,7 +155,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 		isChatCompleted &&
 		status === "completed" &&
 		isLatestAskUserQuestion &&
-		!hasSubmitted &&
+		!hasSubmittedResponse &&
 		Boolean(onSubmitAnswer);
 	const canAdvanceToNextQuestion = isAnswerValid(currentAnswer);
 	const canSubmitAllAnswers = questions.every((_, questionIndex) =>
@@ -236,7 +241,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 			return;
 		}
 
-		setSubmittedAnswers(finalizedAnswers.map(cloneAnswer));
+		setSubmittedResponseText(outgoingMessage);
 		setIsSubmitting(false);
 	};
 
@@ -297,9 +302,8 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 		);
 	}
 
-	const visibleQuestions = hasSubmitted
-		? questions.map((question, questionIndex) => ({ question, questionIndex }))
-		: isInteractive && questions.length > 1
+	const visibleQuestions =
+		isInteractive && questions.length > 1
 			? [
 					{
 						question: questions[activeQuestionIndex],
@@ -320,41 +324,29 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 					const questionIdBase = `${idPrefix}-question-${questionIndex}`;
 					const questionHeaderId = `${questionIdBase}-header`;
 					const questionTextId = `${questionIdBase}-text`;
-					const answer = (submittedAnswers ?? answers)[questionIndex];
+					const answer = answers[questionIndex];
 					const isOtherSelected = answer?.kind === "other";
 					const optionCount = question.options.length;
-					const showSubmittedAnswer = hasSubmitted;
-					const showProgress =
-						isInteractive && questions.length > 1 && !hasSubmitted;
+					const showProgress = isInteractive && questions.length > 1;
 
-					if (showSubmittedAnswer) {
+					if (showSubmittedResponse) {
 						return (
 							<div
 								key={`${question.header}-${question.question}-${questionIndex}`}
-								className="space-y-3"
+								className="space-y-1.5"
 							>
-								<div className="space-y-1.5">
-									<p
-										id={questionHeaderId}
-										className="text-xs font-medium text-content-secondary"
-									>
-										{questionHeader}
-									</p>
-									<p
-										id={questionTextId}
-										className="whitespace-pre-wrap text-sm text-content-primary"
-									>
-										{questionText}
-									</p>
-								</div>
-								<div className="rounded-md border border-solid border-border-default bg-surface-secondary px-3 py-2">
-									<p className="text-xs font-medium text-content-secondary">
-										Submitted answer
-									</p>
-									<p className="mt-1 whitespace-pre-wrap text-sm text-content-primary">
-										{answer ? formatAnswer(answer) : "No answer recorded."}
-									</p>
-								</div>
+								<p
+									id={questionHeaderId}
+									className="text-xs font-medium text-content-secondary"
+								>
+									{questionHeader}
+								</p>
+								<p
+									id={questionTextId}
+									className="whitespace-pre-wrap text-sm text-content-primary"
+								>
+									{questionText}
+								</p>
 							</div>
 						);
 					}
@@ -478,6 +470,17 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 					);
 				})}
 			</div>
+
+			{showSubmittedResponse && (
+				<div className="mt-4 rounded-md border border-solid border-border-default bg-surface-secondary px-3 py-2">
+					<p className="text-xs font-medium text-content-secondary">
+						Submitted answer
+					</p>
+					<p className="mt-1 whitespace-pre-wrap text-sm text-content-primary">
+						{displayedSubmittedResponseText || "No answer recorded."}
+					</p>
+				</div>
+			)}
 
 			{submitError && (
 				<div

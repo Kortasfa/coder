@@ -16,6 +16,48 @@ const baseMessage = {
 	created_at: "2026-03-10T00:00:00.000Z",
 } as const;
 
+const askUserQuestionPayload = {
+	questions: [
+		{
+			header: "Implementation Approach",
+			question: "How should we structure the database migration?",
+			options: [
+				{
+					label: "Single migration",
+					description:
+						"One migration file with all changes. Simpler but harder to roll back.",
+				},
+				{
+					label: "Incremental migrations",
+					description:
+						"Split into multiple sequential migrations. More flexible rollback.",
+				},
+			],
+		},
+		{
+			header: "Release Plan",
+			question: "Which rollout path should we use for the new agent workflow?",
+			options: [
+				{
+					label: "Internal dry run",
+					description:
+						"Ship to the team first and confirm the migration flow before broader rollout.",
+				},
+				{
+					label: "Small beta",
+					description:
+						"Start with a limited set of workspaces so we can gather feedback quickly.",
+				},
+			],
+		},
+	],
+};
+
+const askUserQuestionSubmittedResponse = [
+	"1. Implementation Approach: Incremental migrations",
+	"2. Release Plan: Small beta",
+].join("\n");
+
 const TEXT_ATTACHMENT_RESPONSES = new Map<string, string>([
 	[
 		"storybook-test-text",
@@ -679,6 +721,66 @@ export const AssistantMessageCopyButton: Story = {
 			name: "Copy message",
 		});
 		expect(copyBtn).toBeInTheDocument();
+	},
+};
+
+/** Persisted ask-user-question answers survive reloads. */
+export const AskUserQuestionSubmittedAnswer: Story = {
+	args: {
+		...defaultArgs,
+		isChatCompleted: true,
+		parsedMessages: buildMessages([
+			{
+				...baseMessage,
+				id: 1,
+				role: "user",
+				content: [{ type: "text", text: "Help me pick a rollout plan." }],
+			},
+			{
+				...baseMessage,
+				id: 2,
+				role: "assistant",
+				content: [
+					{
+						type: "tool-call",
+						tool_call_id: "ask-tool-1",
+						tool_name: "ask_user_question",
+					},
+				],
+			},
+			{
+				...baseMessage,
+				id: 3,
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						tool_call_id: "ask-tool-1",
+						result: {
+							output: JSON.stringify(askUserQuestionPayload),
+						},
+					},
+				],
+			},
+			{
+				...baseMessage,
+				id: 4,
+				role: "user",
+				content: [{ type: "text", text: askUserQuestionSubmittedResponse }],
+			},
+		]),
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const submittedAnswer = canvas.getByText("Submitted answer");
+
+		expect(submittedAnswer.nextElementSibling?.textContent).toBe(
+			askUserQuestionSubmittedResponse,
+		);
+		expect(canvas.queryAllByRole("radio")).toHaveLength(0);
+		expect(
+			canvas.queryByRole("button", { name: "Submit" }),
+		).not.toBeInTheDocument();
 	},
 };
 

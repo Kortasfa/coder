@@ -80,6 +80,7 @@ interface ToolProps extends Omit<ComponentPropsWithRef<"div">, "children"> {
 	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
 	isChatCompleted?: boolean;
 	isLatestAskUserQuestion?: boolean;
+	previousResponseText?: string;
 	/** Human-readable intent extracted from the model's tool-call args. */
 	modelIntent?: string;
 }
@@ -101,6 +102,7 @@ type ToolRendererProps = {
 	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
 	isChatCompleted?: boolean;
 	isLatestAskUserQuestion?: boolean;
+	previousResponseText?: string;
 	mcpServerConfigId?: string;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	modelIntent?: string;
@@ -591,6 +593,7 @@ const AskUserQuestionRenderer: FC<ToolRendererProps> = ({
 	onSendAskUserQuestionResponse,
 	isChatCompleted,
 	isLatestAskUserQuestion,
+	previousResponseText,
 }) => {
 	const parsedArgs = parseArgs(args);
 	const questionsFromArgs = parsedArgs
@@ -618,6 +621,7 @@ const AskUserQuestionRenderer: FC<ToolRendererProps> = ({
 			onSubmitAnswer={onSendAskUserQuestionResponse}
 			isChatCompleted={isChatCompleted}
 			isLatestAskUserQuestion={isLatestAskUserQuestion}
+			previousResponseText={previousResponseText}
 		/>
 	);
 };
@@ -916,6 +920,7 @@ export const Tool = memo(
 		onSendAskUserQuestionResponse,
 		isChatCompleted,
 		isLatestAskUserQuestion,
+		previousResponseText,
 		modelIntent,
 		ref,
 		...props
@@ -952,6 +957,7 @@ export const Tool = memo(
 					onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
 					isChatCompleted={isChatCompleted}
 					isLatestAskUserQuestion={isLatestAskUserQuestion}
+					previousResponseText={previousResponseText}
 					modelIntent={modelIntent}
 				/>
 			</div>
