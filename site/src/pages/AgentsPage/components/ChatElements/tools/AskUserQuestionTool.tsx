@@ -409,7 +409,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 												style={{ gridTemplateColumns: "auto 1fr" }}
 											>
 												<RadioGroupItem
-													className="row-span-2 self-start mt-0.5"
+													className="self-center"
 													disabled={!isInteractive || isSubmitting}
 													id={optionId}
 													value={`option-${optionIndex}`}
@@ -417,7 +417,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 												<span className="text-sm font-medium text-content-primary">
 													{option.label || `Option ${optionIndex + 1}`}
 												</span>
-												<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
+												<p className="col-start-2 m-0 whitespace-pre-wrap text-sm text-content-secondary">
 													{option.description || "No description provided."}
 												</p>
 											</label>
@@ -438,7 +438,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 													style={{ gridTemplateColumns: "auto 1fr" }}
 												>
 													<RadioGroupItem
-														className="row-span-2 self-start mt-0.5"
+														className="self-center"
 														disabled={!isInteractive || isSubmitting}
 														id={otherOptionId}
 														value={OTHER_OPTION_VALUE}
@@ -446,7 +446,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 													<span className="text-sm font-medium text-content-primary">
 														Other
 													</span>
-													<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
+													<p className="col-start-2 m-0 whitespace-pre-wrap text-sm text-content-secondary">
 														Share a different answer.
 													</p>
 												</label>
