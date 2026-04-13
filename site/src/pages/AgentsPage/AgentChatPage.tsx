@@ -545,6 +545,7 @@ const AgentChatPage: FC = () => {
 	const planModeEnabled = planModeSearchParam.value === PLAN_MODE_SEARCH_VALUE;
 	const planModeToggleVersionRef = useRef(0);
 
+	const hasPlanModeAutoRestored = useRef(false);
 	const scrollToBottomRef = useRef<(() => void) | null>(null);
 	const chatInputRef = useRef<ChatMessageInputRef | null>(null);
 	const inputValueRef = useRef(
@@ -740,6 +741,41 @@ const AgentChatPage: FC = () => {
 					has_more: chatMessagesQuery.data?.pages.at(-1)?.has_more ?? false,
 				}
 			: undefined;
+	const lastUserMessageIsPlan = (() => {
+		if (!chatMessagesList) {
+			return false;
+		}
+		for (let index = chatMessagesList.length - 1; index >= 0; index -= 1) {
+			const message = chatMessagesList[index];
+			if (message.role !== "user") {
+				continue;
+			}
+			return "turn_mode" in message && message.turn_mode === "plan";
+		}
+		return false;
+	})();
+
+	useEffect(() => {
+		if (hasPlanModeAutoRestored.current) {
+			return;
+		}
+		if (!chatMessagesQuery.data) {
+			return;
+		}
+		hasPlanModeAutoRestored.current = true;
+		if (planModeEnabled) {
+			return;
+		}
+		if (lastUserMessageIsPlan) {
+			planModeSearchParam.setValue(PLAN_MODE_SEARCH_VALUE);
+		}
+	}, [
+		chatMessagesQuery.data,
+		lastUserMessageIsPlan,
+		planModeEnabled,
+		planModeSearchParam,
+	]);
+
 	const isArchived = chatRecord?.archived ?? false;
 	const isRegenerateTitleDisabled = isArchived || isRegeneratingThisChat;
 	const chatLastModelConfigID = chatRecord?.last_model_config_id;
