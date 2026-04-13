@@ -1351,7 +1351,7 @@ const AgentChatPage: FC = () => {
 			message,
 			turnMode: submittedInPlanMode ? "plan" : undefined,
 			useComposerContent: false,
-			resetPlanModeOnSuccess: submittedInPlanMode,
+			resetPlanModeOnSuccess: false,
 			planModeToggleVersion,
 		});
 	};
