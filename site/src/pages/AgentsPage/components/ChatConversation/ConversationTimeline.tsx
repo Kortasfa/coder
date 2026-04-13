@@ -257,6 +257,7 @@ export const BlockList: FC<{
 	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
 	isChatCompleted?: boolean;
 	latestAskUserQuestionToolId?: string;
+	hasUserResponseAfterAskQuestion?: boolean;
 	urlTransform?: UrlTransform;
 }> = ({
 	blocks,
@@ -274,6 +275,7 @@ export const BlockList: FC<{
 	onSendAskUserQuestionResponse,
 	isChatCompleted,
 	latestAskUserQuestionToolId,
+	hasUserResponseAfterAskQuestion = false,
 	urlTransform,
 }) => {
 	const toolByID = new Map(tools.map((tool) => [tool.id, tool]));
@@ -381,7 +383,8 @@ export const BlockList: FC<{
 								onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
 								isChatCompleted={isChatCompleted}
 								isLatestAskUserQuestion={
-									tool.id === latestAskUserQuestionToolId
+									tool.id === latestAskUserQuestionToolId &&
+									!hasUserResponseAfterAskQuestion
 								}
 								modelIntent={tool.modelIntent}
 							/>
@@ -427,7 +430,10 @@ export const BlockList: FC<{
 					onImplementPlan={onImplementPlan}
 					onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
 					isChatCompleted={isChatCompleted}
-					isLatestAskUserQuestion={tool.id === latestAskUserQuestionToolId}
+					isLatestAskUserQuestion={
+						tool.id === latestAskUserQuestionToolId &&
+						!hasUserResponseAfterAskQuestion
+					}
 					modelIntent={tool.modelIntent}
 				/>
 			))}
@@ -460,6 +466,7 @@ const ChatMessageItem = memo<{
 	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
 	isChatCompleted?: boolean;
 	latestAskUserQuestionToolId?: string;
+	hasUserResponseAfterAskQuestion?: boolean;
 }>(
 	({
 		message,
@@ -473,6 +480,7 @@ const ChatMessageItem = memo<{
 		onSendAskUserQuestionResponse,
 		isChatCompleted,
 		latestAskUserQuestionToolId,
+		hasUserResponseAfterAskQuestion = false,
 
 		urlTransform,
 		mcpServers,
@@ -642,6 +650,9 @@ const ChatMessageItem = memo<{
 										}
 										isChatCompleted={isChatCompleted}
 										latestAskUserQuestionToolId={latestAskUserQuestionToolId}
+										hasUserResponseAfterAskQuestion={
+											hasUserResponseAfterAskQuestion
+										}
 										onImageClick={setPreviewImage}
 										onTextFileClick={setPreviewText}
 										urlTransform={urlTransform}
@@ -1063,11 +1074,16 @@ export const ConversationTimeline = memo<ConversationTimelineProps>(
 		}
 
 		let latestAskUserQuestionToolId: string | undefined;
-		for (const { parsed } of parsedMessages) {
+		let hasUserResponseAfterAskQuestion = false;
+		for (const { message, parsed } of parsedMessages) {
 			for (const tool of parsed.tools) {
 				if (tool.name === "ask_user_question") {
 					latestAskUserQuestionToolId = tool.id;
+					hasUserResponseAfterAskQuestion = false;
 				}
+			}
+			if (latestAskUserQuestionToolId && message.role === "user") {
+				hasUserResponseAfterAskQuestion = true;
 			}
 		}
 
@@ -1099,6 +1115,7 @@ export const ConversationTimeline = memo<ConversationTimelineProps>(
 							onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
 							isChatCompleted={isChatCompleted}
 							latestAskUserQuestionToolId={latestAskUserQuestionToolId}
+							hasUserResponseAfterAskQuestion={hasUserResponseAfterAskQuestion}
 							urlTransform={urlTransform}
 							isAfterEditingMessage={afterEditingMessageIds.has(message.id)}
 							hideActions={!isLastInChain}
