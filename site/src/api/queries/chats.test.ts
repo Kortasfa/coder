@@ -785,6 +785,34 @@ describe("mutation invalidation scope", () => {
 		).not.toBe(true);
 	});
 
+	it("editChatMessage onError invalidates chatMessagesKey", async () => {
+		const queryClient = createTestQueryClient();
+		const chatId = "chat-1";
+		seedAllActiveQueries(queryClient, chatId);
+
+		const mutation = editChatMessage(queryClient, chatId);
+
+		const previousData: InfMessages = {
+			pages: [],
+			pageParams: [undefined],
+		};
+
+		const dummyArgs = {
+			messageId: 1,
+			req: { content: [{ type: "text" as const, text: "edited" }] },
+		};
+
+		mutation.onError(new Error("boom"), dummyArgs, { previousData });
+
+		await new Promise((r) => setTimeout(r, 0));
+
+		const messagesState = queryClient.getQueryState(chatMessagesKey(chatId));
+		expect(
+			messagesState?.isInvalidated,
+			"chatMessagesKey should be invalidated after onError",
+		).toBe(true);
+	});
+
 	// Shared type for the infinite messages cache shape used by
 	// editChatMessage tests below.
 	type InfMessages = {

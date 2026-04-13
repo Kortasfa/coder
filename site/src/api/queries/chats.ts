@@ -654,6 +654,14 @@ export const editChatMessage = (queryClient: QueryClient, chatId: string) => ({
 		if (context?.previousData) {
 			queryClient.setQueryData(chatMessagesKey(chatId), context.previousData);
 		}
+
+		// Invalidate messages as a safety net: the restored snapshot
+		// may be missing WebSocket-delivered messages that arrived
+		// during the mutation's flight time.
+		void queryClient.invalidateQueries({
+			queryKey: chatMessagesKey(chatId),
+			exact: true,
+		});
 	},
 	onSuccess: (
 		response: TypesGen.EditChatMessageResponse,

@@ -746,4 +746,66 @@ describe("useConversationEditingState", () => {
 		expect(result.current.editorInitialValue).toBe("plain text draft");
 		unmount();
 	});
+
+	it("awaits onSend resolution before completing an edit send", async () => {
+		// Manually-controlled promise so we can verify the hook waits
+		// for onSend to resolve before finalizing the send. This
+		// mirrors the real handleSend which does `await editMessage()`
+		// then `scrollToBottomRef.current?.()` — if the await were
+		// removed, scroll would fire while the optimistic truncation
+		// is still pending, causing sticky message cycling.
+		let resolveOnSend!: () => void;
+		const onSend = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveOnSend = resolve;
+				}),
+		);
+		const onDeleteQueuedMessage = vi.fn().mockResolvedValue(undefined);
+		const chatInputRef = createRef<ChatMessageInputRef>();
+		const inputValueRef = { current: "" } as React.RefObject<string>;
+
+		const { result, unmount } = renderHook(() =>
+			useConversationEditingState({
+				chatID: "chat-abc-123",
+				onSend,
+				onDeleteQueuedMessage,
+				chatInputRef,
+				inputValueRef,
+			}),
+		);
+
+		const mockInput = createMockChatInputHandle("edited text");
+		result.current.chatInputRef.current = mockInput.handle;
+
+		// Enter edit mode.
+		act(() => {
+			result.current.handleEditUserMessage(7, "edited text");
+		});
+		expect(result.current.editingMessageId).toBe(7);
+
+		// Start the send but don't resolve onSend yet.
+		let sendCompleted = false;
+		const sendPromise = act(async () => {
+			await result.current.handleSendFromInput("edited text");
+			sendCompleted = true;
+		});
+
+		// onSend was called with the edit message ID.
+		expect(onSend).toHaveBeenCalledWith("edited text", undefined, 7);
+
+		// The send flow must NOT have completed yet — onSend is
+		// still pending. This ordering is critical: handleSend
+		// awaits editMessage() before calling scrollToBottom().
+		expect(sendCompleted).toBe(false);
+
+		// Resolve onSend and let the send flow complete.
+		await act(async () => {
+			resolveOnSend();
+			await sendPromise;
+		});
+
+		expect(sendCompleted).toBe(true);
+		unmount();
+	});
 });
