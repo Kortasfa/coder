@@ -49,7 +49,7 @@ export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
 					disabled={isDisabled}
 					data-testid="compact-org-selector"
 					className={cn(
-						"flex h-8 w-auto items-center gap-1.5 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors",
+						"flex h-8 w-auto cursor-pointer items-center gap-1 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors",
 						"hover:text-content-primary focus:ring-0",
 						"disabled:cursor-not-allowed disabled:opacity-50",
 						className,
@@ -57,10 +57,12 @@ export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
 				>
 					{value ? (
 						<>
+							{/* Scale down the avatar to match toolbar icon sizes. */}
 							<Avatar
 								size="sm"
 								src={value.icon}
 								fallback={value.display_name}
+								className="!size-4"
 							/>
 							<span className="truncate">
 								{value.display_name || value.name}
