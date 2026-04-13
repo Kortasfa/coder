@@ -409,7 +409,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 												style={{ gridTemplateColumns: "auto 1fr" }}
 											>
 												<RadioGroupItem
-													className="row-span-2 self-center"
+													className="row-span-2 self-start mt-0.5"
 													disabled={!isInteractive || isSubmitting}
 													id={optionId}
 													value={`option-${optionIndex}`}
@@ -438,7 +438,7 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 													style={{ gridTemplateColumns: "auto 1fr" }}
 												>
 													<RadioGroupItem
-														className="row-span-2 self-center"
+														className="row-span-2 self-start mt-0.5"
 														disabled={!isInteractive || isSubmitting}
 														id={otherOptionId}
 														value={OTHER_OPTION_VALUE}
