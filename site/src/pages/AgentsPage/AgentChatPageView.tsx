@@ -86,6 +86,9 @@ interface AgentChatPageViewProps {
 	// Chat data.
 	agentId: string;
 	organizationId: string | undefined;
+	selectedOrg?: TypesGen.Organization | null;
+	orgOptions?: readonly TypesGen.Organization[];
+	showOrgSelector?: boolean;
 	chatTitle: string | undefined;
 	parentChat: TypesGen.Chat | undefined;
 	persistedError: ChatDetailError | undefined;
@@ -178,6 +181,9 @@ interface AgentChatPageViewProps {
 export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 	agentId,
 	organizationId,
+	selectedOrg,
+	orgOptions,
+	showOrgSelector,
 	chatTitle,
 	parentChat,
 	persistedError,
@@ -420,6 +426,10 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 						<div className="shrink-0 overflow-y-auto px-4 pb-4 md:pb-0 [scrollbar-gutter:stable] [scrollbar-width:thin]">
 							<ChatPageInput
 								organizationId={organizationId}
+								selectedOrg={selectedOrg}
+								orgOptions={orgOptions}
+								showOrgSelector={showOrgSelector}
+								isOrgDisabled
 								store={store}
 								compressionThreshold={compressionThreshold}
 								onSend={editing.handleSendFromInput}

@@ -36,6 +36,7 @@ import {
 	getVSCodeHref,
 	openAppInNewWindow,
 } from "#/modules/apps/apps";
+import { useDashboard } from "#/modules/dashboard/useDashboard";
 import { isMobileViewport } from "#/utils/mobile";
 import { pageTitle } from "#/utils/page";
 import { rewriteLocalhostURL } from "#/utils/portForward";
@@ -526,6 +527,7 @@ const AgentChatPage: FC = () => {
 		onChatReady,
 		scrollContainerRef,
 	} = useOutletContext<AgentsOutletContext>();
+	const { organizations, showOrganizations } = useDashboard();
 	const queryClient = useQueryClient();
 	const [selectedModel, setSelectedModel] = useState("");
 	const scrollToBottomRef = useRef<(() => void) | null>(null);
@@ -1234,6 +1236,12 @@ const AgentChatPage: FC = () => {
 		<AgentChatPageView
 			agentId={agentId}
 			organizationId={chatQuery.data?.organization_id}
+			selectedOrg={
+				organizations.find((o) => o.id === chatQuery.data?.organization_id) ??
+				null
+			}
+			orgOptions={organizations}
+			showOrgSelector={showOrganizations}
 			chatTitle={chatTitle}
 			parentChat={parentChat}
 			persistedError={persistedError}

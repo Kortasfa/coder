@@ -1,0 +1,113 @@
+import { Check } from "lucide-react";
+import { type FC, useState } from "react";
+import type { Organization } from "#/api/typesGenerated";
+import { Avatar } from "#/components/Avatar/Avatar";
+import {
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "#/components/Command/Command";
+import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "#/components/Popover/Popover";
+import { cn } from "#/utils/cn";
+
+interface CompactOrgSelectorProps {
+	value: Organization | null;
+	onChange: (organization: Organization) => void;
+	options: readonly Organization[];
+	disabled?: boolean;
+	className?: string;
+	/** Side to open the dropdown on. */
+	dropdownSide?: "top" | "bottom" | "left" | "right";
+	/** Alignment of the dropdown relative to the trigger. */
+	dropdownAlign?: "start" | "center" | "end";
+}
+
+export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
+	value,
+	onChange,
+	options,
+	disabled = false,
+	className,
+	dropdownSide = "bottom",
+	dropdownAlign = "start",
+}) => {
+	const [open, setOpen] = useState(false);
+	const isDisabled = disabled || options.length === 0;
+
+	return (
+		<Popover open={open} onOpenChange={isDisabled ? undefined : setOpen}>
+			<PopoverTrigger asChild>
+				<button
+					type="button"
+					disabled={isDisabled}
+					data-testid="compact-org-selector"
+					className={cn(
+						"flex h-8 w-auto items-center gap-1.5 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors",
+						"hover:text-content-primary focus:ring-0",
+						"disabled:cursor-not-allowed disabled:opacity-50",
+						className,
+					)}
+				>
+					{value ? (
+						<>
+							<Avatar
+								size="sm"
+								src={value.icon}
+								fallback={value.display_name}
+							/>
+							<span className="truncate">{value.display_name}</span>
+						</>
+					) : (
+						<span>Select org…</span>
+					)}
+				</button>
+			</PopoverTrigger>
+			<PopoverContent
+				side={dropdownSide}
+				align={dropdownAlign}
+				className="w-64 p-0"
+			>
+				<Command loop>
+					<CommandInput placeholder="Find organization…" className="text-xs" />
+					<CommandList>
+						<CommandEmpty className="text-xs">
+							No organizations found.
+						</CommandEmpty>
+						<CommandGroup>
+							{options.map((org) => (
+								<CommandItem
+									className="text-xs font-normal"
+									key={org.id}
+									value={`${org.display_name} ${org.name}`}
+									onSelect={() => {
+										onChange(org);
+										setOpen(false);
+									}}
+								>
+									<Avatar
+										size="sm"
+										src={org.icon}
+										fallback={org.display_name}
+									/>
+									<span className="truncate">
+										{org.display_name || org.name}
+									</span>
+									{value?.id === org.id && (
+										<Check className="ml-auto size-icon-sm shrink-0" />
+									)}
+								</CommandItem>
+							))}
+						</CommandGroup>
+					</CommandList>
+				</Command>
+			</PopoverContent>
+		</Popover>
+	);
+};

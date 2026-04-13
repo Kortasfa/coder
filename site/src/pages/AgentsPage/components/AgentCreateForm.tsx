@@ -7,8 +7,6 @@ import { Alert, AlertDescription } from "#/components/Alert/Alert";
 import { ErrorAlert } from "#/components/Alert/ErrorAlert";
 import { Button } from "#/components/Button/Button";
 import { ConfirmDialog } from "#/components/Dialogs/ConfirmDialog/ConfirmDialog";
-import { Label } from "#/components/Label/Label";
-import { OrganizationAutocomplete } from "#/components/OrganizationAutocomplete/OrganizationAutocomplete";
 import { useDashboard } from "#/modules/dashboard/useDashboard";
 import { docs } from "#/utils/docs";
 import { useFileAttachments } from "../hooks/useFileAttachments";
@@ -399,28 +397,6 @@ export const AgentCreateForm: FC<AgentCreateFormProps> = ({
 						)
 					) : null}
 					{workspacesError != null && <ErrorAlert error={workspacesError} />}
-					{showOrganizations && (
-						<div className="flex flex-col gap-2">
-							<Label htmlFor="organization">Organization</Label>
-							<OrganizationAutocomplete
-								id="organization"
-								required
-								value={selectedOrg}
-								options={organizations}
-								onChange={(newOrg) => {
-									const orgChanged = newOrg?.id !== selectedOrg?.id;
-									if (orgChanged && attachments.length > 0) {
-										setPendingOrgChange(newOrg);
-										return;
-									}
-									if (orgChanged) {
-										handleWorkspaceChange(null);
-									}
-									setSelectedOrg(newOrg);
-								}}
-							/>
-						</div>
-					)}
 					<AgentChatInput
 						onSend={handleSendWithAttachments}
 						placeholder="Ask Coder to build, fix bugs, or explore your project..."
@@ -429,6 +405,20 @@ export const AgentCreateForm: FC<AgentCreateFormProps> = ({
 						initialValue={initialInputValue}
 						initialEditorState={initialEditorState}
 						onContentChange={handleContentChange}
+						selectedOrg={selectedOrg}
+						onOrgChange={(newOrg) => {
+							const orgChanged = newOrg?.id !== selectedOrg?.id;
+							if (orgChanged && attachments.length > 0) {
+								setPendingOrgChange(newOrg);
+								return;
+							}
+							if (orgChanged) {
+								handleWorkspaceChange(null);
+							}
+							setSelectedOrg(newOrg);
+						}}
+						orgOptions={organizations}
+						showOrgSelector={showOrganizations}
 						selectedModel={selectedModel}
 						onModelChange={handleModelChange}
 						modelOptions={modelOptions}

@@ -125,6 +125,11 @@ export type PendingAttachment = {
 interface ChatPageInputProps {
 	// Organization that owns this chat. Used to scope file uploads.
 	organizationId: string | undefined;
+	// Organization selector state for the chat input toolbar.
+	selectedOrg?: import("#/api/typesGenerated").Organization | null;
+	orgOptions?: readonly import("#/api/typesGenerated").Organization[];
+	showOrgSelector?: boolean;
+	isOrgDisabled?: boolean;
 	store: ChatStoreHandle;
 	compressionThreshold: number | undefined;
 	onSend: (
@@ -183,6 +188,10 @@ interface ChatPageInputProps {
 
 export const ChatPageInput: FC<ChatPageInputProps> = ({
 	organizationId,
+	selectedOrg,
+	orgOptions,
+	showOrgSelector = false,
+	isOrgDisabled = false,
 	store,
 	compressionThreshold,
 	onSend,
@@ -381,6 +390,10 @@ export const ChatPageInput: FC<ChatPageInputProps> = ({
 			isInterruptPending={isInterruptPending}
 			contextUsage={latestContextUsage}
 			hasModelOptions={hasModelOptions}
+			selectedOrg={selectedOrg}
+			orgOptions={orgOptions}
+			showOrgSelector={showOrgSelector}
+			isOrgDisabled={isOrgDisabled}
 			selectedModel={selectedModel}
 			onModelChange={onModelChange}
 			modelOptions={modelOptions}
