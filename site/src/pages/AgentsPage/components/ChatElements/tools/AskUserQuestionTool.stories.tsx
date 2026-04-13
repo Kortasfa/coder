@@ -185,6 +185,103 @@ export const InteractiveSingleQuestionOther: Story = {
 	},
 };
 
+export const KeyboardNavigation: Story = {
+	args: {
+		status: "completed",
+		result: JSON.stringify(singleQuestionPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: true,
+		onSendAskUserQuestionResponse: fn(),
+	},
+	play: async ({ canvasElement, args }) => {
+		const canvas = within(canvasElement);
+		const firstRadio = canvas.getByRole("radio", {
+			name: /single migration/i,
+		});
+		const secondRadio = canvas.getByRole("radio", {
+			name: /incremental migrations/i,
+		});
+		const submitButton = canvas.getByRole("button", { name: "Submit" });
+
+		expect(firstRadio).toBeChecked();
+
+		await userEvent.tab();
+		expect(firstRadio).toHaveFocus();
+
+		await userEvent.keyboard("{ArrowDown}");
+		expect(secondRadio).toHaveFocus();
+
+		await userEvent.keyboard(" ");
+		expect(secondRadio).toBeChecked();
+
+		await userEvent.tab();
+		expect(submitButton).toHaveFocus();
+
+		await userEvent.keyboard("{Enter}");
+
+		if (!args.onSendAskUserQuestionResponse) {
+			throw new Error("Missing ask-user-question response callback.");
+		}
+		expect(args.onSendAskUserQuestionResponse).toHaveBeenCalledWith(
+			"Incremental migrations",
+		);
+		expect(canvas.getByText("Submitted answer")).toBeInTheDocument();
+	},
+};
+
+export const KeyboardOtherSubmit: Story = {
+	args: {
+		status: "completed",
+		result: JSON.stringify(singleQuestionPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: true,
+		onSendAskUserQuestionResponse: fn(),
+	},
+	play: async ({ canvasElement, args }) => {
+		const canvas = within(canvasElement);
+		const firstRadio = canvas.getByRole("radio", {
+			name: /single migration/i,
+		});
+		const submitButton = canvas.getByRole("button", { name: "Submit" });
+
+		expect(firstRadio).toBeChecked();
+
+		await userEvent.tab();
+		expect(firstRadio).toHaveFocus();
+
+		const secondRadio = canvas.getByRole("radio", {
+			name: /incremental migrations/i,
+		});
+		const otherRadio = canvas.getByRole("radio", { name: /other/i });
+
+		await userEvent.keyboard("{ArrowDown}");
+		expect(secondRadio).toHaveFocus();
+
+		await userEvent.keyboard("{ArrowDown}");
+		expect(otherRadio).toHaveFocus();
+
+		await userEvent.keyboard(" ");
+		expect(otherRadio).toBeChecked();
+		expect(submitButton).toBeDisabled();
+
+		const otherInput = canvas.getByPlaceholderText("Describe another answer");
+		expect(otherInput).toHaveFocus();
+
+		await userEvent.type(otherInput, "Custom approach");
+		expect(submitButton).toBeEnabled();
+
+		await userEvent.keyboard("{Enter}");
+
+		if (!args.onSendAskUserQuestionResponse) {
+			throw new Error("Missing ask-user-question response callback.");
+		}
+		expect(args.onSendAskUserQuestionResponse).toHaveBeenCalledWith(
+			"Other: Custom approach",
+		);
+		expect(canvas.getByText("Submitted answer")).toBeInTheDocument();
+	},
+};
+
 export const InteractiveWizardStep: Story = {
 	args: {
 		status: "completed",

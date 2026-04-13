@@ -1,5 +1,5 @@
 import { LoaderIcon, TriangleAlertIcon } from "lucide-react";
-import { type FC, useId, useState } from "react";
+import { type FC, type FormEvent, useId, useState } from "react";
 import { Button } from "#/components/Button/Button";
 import { Input } from "#/components/Input/Input";
 import { RadioGroup, RadioGroupItem } from "#/components/RadioGroup/RadioGroup";
@@ -240,6 +240,20 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 		setIsSubmitting(false);
 	};
 
+	const handleFormSubmit = (event: FormEvent<HTMLFormElement>) => {
+		event.preventDefault();
+		if (!isInteractive) {
+			return;
+		}
+
+		if (questions.length > 1 && activeQuestionIndex < questions.length - 1) {
+			handleNext();
+			return;
+		}
+
+		void handleSubmit();
+	};
+
 	if (isError) {
 		return (
 			<div className="w-full">
@@ -297,24 +311,8 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 					questionIndex,
 				}));
 
-	return (
-		<div className="w-full">
-			{isRunning && (
-				<div
-					role="status"
-					aria-live="polite"
-					className="flex items-center gap-1.5 py-0.5"
-				>
-					<span className="text-sm text-content-secondary">
-						Asking for clarification...
-					</span>
-					<LoaderIcon
-						data-testid="ask-user-question-loading-icon"
-						className="h-3.5 w-3.5 shrink-0 animate-spin text-content-secondary motion-reduce:animate-none"
-					/>
-				</div>
-			)}
-
+	const content = (
+		<>
 			<div className="space-y-5">
 				{visibleQuestions.map(({ question, questionIndex }) => {
 					const questionHeader = getQuestionHeader(question, questionIndex);
@@ -496,21 +494,19 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 					{questions.length > 1 &&
 					activeQuestionIndex < questions.length - 1 ? (
 						<Button
+							type="submit"
 							size="sm"
 							variant="outline"
 							disabled={!canAdvanceToNextQuestion || isSubmitting}
-							onClick={handleNext}
 						>
 							Next
 						</Button>
 					) : (
 						<Button
+							type="submit"
 							size="sm"
 							variant="outline"
 							disabled={!canSubmitAllAnswers || isSubmitting}
-							onClick={() => {
-								void handleSubmit();
-							}}
 						>
 							{isSubmitting && (
 								<LoaderIcon className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
@@ -519,6 +515,32 @@ export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 						</Button>
 					)}
 				</div>
+			)}
+		</>
+	);
+
+	return (
+		<div className="w-full">
+			{isRunning && (
+				<div
+					role="status"
+					aria-live="polite"
+					className="flex items-center gap-1.5 py-0.5"
+				>
+					<span className="text-sm text-content-secondary">
+						Asking for clarification...
+					</span>
+					<LoaderIcon
+						data-testid="ask-user-question-loading-icon"
+						className="h-3.5 w-3.5 shrink-0 animate-spin text-content-secondary motion-reduce:animate-none"
+					/>
+				</div>
+			)}
+
+			{isInteractive ? (
+				<form onSubmit={handleFormSubmit}>{content}</form>
+			) : (
+				content
 			)}
 		</div>
 	);
