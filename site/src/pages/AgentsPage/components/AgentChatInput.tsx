@@ -106,9 +106,9 @@ interface AgentChatInputProps {
 		hasFileReferences: boolean,
 	) => void;
 	// Organization selector (visible in multi-org deployments).
-	selectedOrg?: import("#/api/typesGenerated").Organization | null;
-	onOrgChange?: (org: import("#/api/typesGenerated").Organization) => void;
-	orgOptions?: readonly import("#/api/typesGenerated").Organization[];
+	selectedOrg?: TypesGen.Organization | null;
+	onOrgChange?: (org: TypesGen.Organization) => void;
+	orgOptions?: readonly TypesGen.Organization[];
 	showOrgSelector?: boolean;
 	isOrgDisabled?: boolean;
 	// Model selector.
@@ -324,12 +324,29 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 	// Ref for the inline selector wrapper used by the overflow hook
 	// to detect when the org/model selectors don't fit.
 	const selectorWrapperRef = useRef<HTMLDivElement>(null);
-	const selectorItemCount = (showOrgSelector ? 1 : 0) + 1; // org + model
+	// Align item count with the actual rendering guard so
+	// useOverflowCount operates on the correct child count.
+	const showOrgInline = showOrgSelector && !!orgOptions;
+	const selectorItemCount = (showOrgInline ? 1 : 0) + 1;
 	const selectorOverflow = useOverflowCount(
 		selectorWrapperRef,
 		selectorItemCount,
 	);
 	const selectorsCollapsed = selectorOverflow > 0;
+
+	// Close the settings menu and its sub-popovers when the
+	// overflow state changes so stale popovers don't linger.
+	useEffect(() => {
+		if (selectorsCollapsed) {
+			// Selectors just collapsed into the settings menu —
+			// nothing to close.
+			return;
+		}
+		// Selectors expanded back inline — dismiss the dropdown
+		// so it doesn't overlay the now-visible inline selectors.
+		setSettingsMenuOpen(false);
+		setSettingsOrgPickerOpen(false);
+	}, [selectorsCollapsed]);
 
 	const [hasFileReferences, setHasFileReferences] = useState(false);
 
@@ -952,17 +969,19 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 									align="start"
 									className="w-auto min-w-[200px] p-1"
 								>
-									{showOrgSelector && orgOptions && onOrgChange && (
+									{showOrgSelector && orgOptions && (
 										<Popover
 											open={settingsOrgPickerOpen}
 											onOpenChange={
-												isOrgDisabled ? undefined : setSettingsOrgPickerOpen
+												isOrgDisabled || !onOrgChange
+													? undefined
+													: setSettingsOrgPickerOpen
 											}
 										>
 											<PopoverTrigger asChild>
 												<button
 													type="button"
-													disabled={isOrgDisabled}
+													disabled={isOrgDisabled || !onOrgChange}
 													className="group flex h-8 w-full cursor-pointer items-center gap-1.5 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors hover:text-content-primary disabled:cursor-not-allowed disabled:opacity-50"
 												>
 													{selectedOrg ? (
@@ -973,7 +992,7 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 																fallback={selectedOrg.display_name}
 															/>
 															<span className="truncate">
-																{selectedOrg.display_name}
+																{selectedOrg.display_name || selectedOrg.name}
 															</span>
 														</>
 													) : (
@@ -1009,7 +1028,7 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 																	key={org.id}
 																	value={`${org.display_name} ${org.name}`}
 																	onSelect={() => {
-																		onOrgChange(org);
+																		onOrgChange?.(org);
 																		setSettingsOrgPickerOpen(false);
 																		setSettingsMenuOpen(false);
 																	}}
@@ -1054,12 +1073,12 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 							ref={selectorWrapperRef}
 							className="flex min-w-0 items-center gap-1 overflow-hidden"
 						>
-							{showOrgSelector && orgOptions && onOrgChange && (
+							{showOrgSelector && orgOptions && (
 								<CompactOrgSelector
 									value={selectedOrg ?? null}
-									onChange={onOrgChange}
+									onChange={onOrgChange ?? (() => {})}
 									options={orgOptions}
-									disabled={isOrgDisabled || isDisabled}
+									disabled={isOrgDisabled || isDisabled || !onOrgChange}
 									dropdownSide="top"
 									dropdownAlign="start"
 									className={selectorsCollapsed ? "invisible" : undefined}
