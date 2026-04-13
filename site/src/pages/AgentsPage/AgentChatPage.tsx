@@ -759,7 +759,7 @@ const AgentChatPage: FC = () => {
 	const { mutateAsync: promoteQueuedMessage } = useMutation(
 		promoteChatQueuedMessage(queryClient, agentId ?? ""),
 	);
-	const forkMutation = useMutation(forkChat(queryClient));
+	const { mutateAsync: forkChatAsync } = useMutation(forkChat(queryClient));
 	const navigate = useNavigate();
 
 	const { store, clearStreamError, upsertCacheMessages } = useChatStore({
@@ -1222,16 +1222,16 @@ const AgentChatPage: FC = () => {
 		async (messageId: number) => {
 			if (!agentId) return;
 			try {
-				const newChat = await forkMutation.mutateAsync({
+				const newChat = await forkChatAsync({
 					chatId: agentId,
 					req: { message_id: messageId },
 				});
 				navigate(`/agents/${newChat.id}`);
 			} catch {
-				// Error is handled by React Query.
+				toast.error("Failed to fork chat.");
 			}
 		},
-		[agentId, forkMutation, navigate],
+		[agentId, forkChatAsync, navigate],
 	);
 
 	if (chatQuery.isLoading || chatMessagesQuery.isLoading) {

@@ -354,7 +354,6 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 						)}
 					>
 						<div className="relative z-10 shrink-0 overflow-visible">
-							{" "}
 							<ChatTopBar
 								chatTitle={chatTitle}
 								parentChat={parentChat}
@@ -422,7 +421,7 @@ export const AgentChatPageView: FC<AgentChatPageViewProps> = ({
 									editingMessageId={editing.editingMessageId}
 									urlTransform={urlTransform}
 									mcpServers={mcpServers}
-								/>{" "}
+								/>
 							</div>
 						</ChatScrollContainer>
 						<div className="shrink-0 overflow-y-auto px-4 pb-4 md:pb-0 [scrollbar-gutter:stable] [scrollbar-width:thin]">
@@ -610,7 +609,7 @@ export const AgentChatPageLoadingView: FC<AgentChatPageLoadingViewProps> = ({
 						isModelCatalogLoading={isModelCatalogLoading}
 						hasModelOptions={hasModelOptions}
 					/>
-				</div>{" "}
+				</div>
 			</div>
 			{showRightPanel && (
 				<RightPanel

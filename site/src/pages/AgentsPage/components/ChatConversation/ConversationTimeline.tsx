@@ -947,7 +947,7 @@ const StickyUserMessage = memo<{
 							onForkFromMessage={onForkFromMessage}
 							editingMessageId={editingMessageId}
 							isAfterEditingMessage={isAfterEditingMessage}
-						/>{" "}
+						/>
 					</div>
 
 					{/* Overlay: absolutely positioned, matching the
@@ -991,7 +991,7 @@ const StickyUserMessage = memo<{
 									editingMessageId={editingMessageId}
 									isAfterEditingMessage={isAfterEditingMessage}
 									fadeFromBottom
-								/>{" "}
+								/>
 							</div>
 						</div>
 					)}
