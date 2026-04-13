@@ -1359,6 +1359,12 @@ func (p *Server) ArchiveChat(ctx context.Context, chat database.Chat) error {
 		// We do not call setChatWaiting here because it intentionally preserves
 		// pending chats so queued-message promotion can win. Archiving is a
 		// harder stop: both pending and running chats must transition to waiting.
+		//
+		// Archiving interrupts the current generation without fencing a newer
+		// one in because there is no replacement run to start. We keep the same
+		// run generation here so the archive control message still targets the
+		// active run directly, and processChat's deferred cleanup only replays
+		// an idempotent waiting -> waiting release after the archive lands.
 		if lockedChat.Status == database.ChatStatusPending || lockedChat.Status == database.ChatStatusRunning {
 			statusChat, err = tx.UpdateChatStatus(ctx, database.UpdateChatStatusParams{
 				ID:          chat.ID,
@@ -3158,8 +3164,9 @@ func (p *Server) cleanupStreamIfIdle(chatID uuid.UUID, state *chatStreamState) {
 }
 
 // registerHeartbeat enrolls a chat in the centralized batch
-// heartbeat loop. Must be called after chatCtx is created.
-func (p *Server) registerHeartbeat(entry *heartbeatEntry) {
+// heartbeat loop. Must be called after chatCtx is created. It returns
+// false when an equal-or-newer generation is already registered.
+func (p *Server) registerHeartbeat(entry *heartbeatEntry) bool {
 	p.heartbeatMu.Lock()
 	defer p.heartbeatMu.Unlock()
 
@@ -3170,7 +3177,7 @@ func (p *Server) registerHeartbeat(entry *heartbeatEntry) {
 				slog.F("chat_id", entry.chatID),
 				slog.F("existing_run_generation", existing.runGeneration),
 				slog.F("incoming_run_generation", entry.runGeneration))
-			return
+			return false
 		}
 
 		// A newer generation for the same chat can start before the old
@@ -3181,6 +3188,7 @@ func (p *Server) registerHeartbeat(entry *heartbeatEntry) {
 	}
 
 	p.heartbeatRegistry[entry.chatID] = entry
+	return true
 }
 
 // unregisterHeartbeat removes a chat from the centralized
@@ -3522,6 +3530,11 @@ func (p *Server) Subscribe(
 		}
 
 		drainLocalBeforeNotify := func() bool {
+			// Best effort: a local event published just after the default
+			// case below can still be observed by the outer select instead
+			// of this pre-notify drain. That may reorder a local event
+			// relative to the pubsub-triggered catch-up, but it does not
+			// lose the event because the main loop will still read it.
 			for localParts != nil {
 				select {
 				case event, ok := <-localParts:
@@ -4292,7 +4305,9 @@ func (p *Server) trackWorkspaceUsage(
 func (p *Server) shouldStartOwnedRun(ctx context.Context, chat database.Chat) bool {
 	// This ownership re-check is best-effort. On read failure we prefer
 	// liveness here because persist-time generation fencing remains the
-	// authoritative safety boundary for stale runs.
+	// authoritative safety boundary for stale runs. If the database is
+	// persistently unavailable, that same fence fails too and the run
+	// errors out instead of continuing indefinitely.
 	latest, err := p.db.GetChatByID(ctx, chat.ID)
 	if err != nil {
 		p.logger.Warn(ctx, "failed to verify chat ownership before start",
@@ -4325,7 +4340,13 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 		workspaceID:     chat.WorkspaceID,
 		logger:          logger,
 	}
-	p.registerHeartbeat(heartbeat)
+	if !p.registerHeartbeat(heartbeat) {
+		logger.Info(ctx, "chat already registered with newer or equal generation",
+			slog.F("run_generation", chat.RunGeneration),
+		)
+		cancel(chatloop.ErrInterrupted)
+		return
+	}
 	defer p.unregisterHeartbeat(heartbeat)
 
 	// Re-check ownership after registration so a mutation that won the
