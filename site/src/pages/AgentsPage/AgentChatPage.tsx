@@ -1344,6 +1344,18 @@ const AgentChatPage: FC = () => {
 		onRegenerateTitle(agentId);
 	};
 
+	const handleSendAskUserQuestionResponse = async (message: string) => {
+		const submittedInPlanMode = planModeEnabled;
+		const planModeToggleVersion = planModeToggleVersionRef.current;
+		await submitChatTurn({
+			message,
+			turnMode: submittedInPlanMode ? "plan" : undefined,
+			useComposerContent: false,
+			resetPlanModeOnSuccess: submittedInPlanMode,
+			planModeToggleVersion,
+		});
+	};
+
 	const handleImplementPlan = async () => {
 		await submitChatTurn({
 			message: "Implement the plan.",
@@ -1432,6 +1444,7 @@ const AgentChatPage: FC = () => {
 			handleDeleteQueuedMessage={handleDeleteQueuedMessage}
 			handlePromoteQueuedMessage={handlePromoteQueuedMessage}
 			onImplementPlan={handleImplementPlan}
+			onSendAskUserQuestionResponse={handleSendAskUserQuestionResponse}
 			handleArchiveAgentAction={handleArchiveAgentAction}
 			handleUnarchiveAgentAction={handleUnarchiveAgentAction}
 			handleArchiveAndDeleteWorkspaceAction={

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import { Tool } from "./Tool";
 
 const runningPayload = {
@@ -86,38 +86,6 @@ const multipleQuestionsPayload = {
 	],
 };
 
-const manyOptionsPayload = {
-	questions: [
-		{
-			header: "Validation Strategy",
-			question:
-				"What level of validation should we run before merging the migration changes?",
-			options: [
-				{
-					label: "Typecheck only",
-					description:
-						"Fastest feedback, but it does not catch regressions outside compilation.",
-				},
-				{
-					label: "Targeted tests",
-					description:
-						"Run the affected frontend tests and keep validation focused on changed flows.",
-				},
-				{
-					label: "Pre-commit suite",
-					description:
-						"Use the standard pre-commit checks for broader confidence before review.",
-				},
-				{
-					label: "Pre-push suite",
-					description:
-						"Run the heaviest local validation before the branch leaves the workstation.",
-				},
-			],
-		},
-	],
-};
-
 const meta: Meta<typeof Tool> = {
 	title: "pages/AgentsPage/ChatElements/tools/AskUserQuestion",
 	component: Tool,
@@ -147,58 +115,170 @@ export const Running: Story = {
 		expect(
 			canvas.getByTestId("ask-user-question-loading-icon"),
 		).toBeInTheDocument();
-		expect(canvas.getAllByRole("radio")).toHaveLength(2);
+		expect(canvas.getAllByRole("radio")).toHaveLength(3);
 	},
 };
 
-export const SingleQuestion: Story = {
+export const InteractiveSingleQuestion: Story = {
 	args: {
 		status: "completed",
 		result: JSON.stringify(singleQuestionPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: true,
+		onSendAskUserQuestionResponse: fn(),
 	},
-	play: async ({ canvasElement }) => {
+	play: async ({ canvasElement, args }) => {
 		const canvas = within(canvasElement);
+		const submitButton = canvas.getByRole("button", { name: "Submit" });
 
-		expect(canvas.getByText("Implementation Approach")).toBeInTheDocument();
+		expect(submitButton).toBeDisabled();
+		expect(canvas.getAllByRole("radio")).toHaveLength(3);
+
+		await userEvent.click(
+			canvas.getByRole("radio", { name: /single migration/i }),
+		);
+		expect(submitButton).toBeEnabled();
+
+		await userEvent.click(submitButton);
+		if (!args.onSendAskUserQuestionResponse) {
+			throw new Error("Missing ask-user-question response callback.");
+		}
+		expect(args.onSendAskUserQuestionResponse).toHaveBeenCalledWith(
+			"Single migration",
+		);
+		expect(canvas.getByText("Submitted answer")).toBeInTheDocument();
+		expect(canvas.getByText("Single migration")).toBeInTheDocument();
 		expect(
-			canvas.getByText("How should we structure the database migration?"),
-		).toBeInTheDocument();
-		expect(canvas.getAllByRole("radio")).toHaveLength(2);
-		expect(
-			canvas.queryByText("Asking for clarification..."),
+			canvas.queryByRole("button", { name: "Submit" }),
 		).not.toBeInTheDocument();
 	},
 };
 
-export const MultipleQuestions: Story = {
+export const InteractiveSingleQuestionOther: Story = {
 	args: {
 		status: "completed",
-		result: JSON.stringify(multipleQuestionsPayload),
+		result: JSON.stringify(singleQuestionPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: true,
+		onSendAskUserQuestionResponse: fn(),
 	},
-	play: async ({ canvasElement }) => {
+	play: async ({ canvasElement, args }) => {
 		const canvas = within(canvasElement);
+		const submitButton = canvas.getByRole("button", { name: "Submit" });
 
-		expect(canvas.getByText("Release Plan")).toBeInTheDocument();
-		expect(
-			canvas.getByText(
-				"Which rollout path should we use for the new agent workflow?",
-			),
-		).toBeInTheDocument();
-		expect(canvas.getAllByRole("radio")).toHaveLength(5);
+		await userEvent.click(canvas.getByRole("radio", { name: /^other/i }));
+		const otherInput = canvas.getByRole("textbox", { name: /other response/i });
+		expect(otherInput).toHaveFocus();
+		expect(submitButton).toBeDisabled();
+
+		await userEvent.type(otherInput, "Use a canary rollout");
+		expect(submitButton).toBeEnabled();
+
+		await userEvent.click(submitButton);
+		if (!args.onSendAskUserQuestionResponse) {
+			throw new Error("Missing ask-user-question response callback.");
+		}
+		expect(args.onSendAskUserQuestionResponse).toHaveBeenCalledWith(
+			"Other: Use a canary rollout",
+		);
+		expect(canvas.getByText("Other: Use a canary rollout")).toBeInTheDocument();
 	},
 };
 
-export const ManyOptions: Story = {
+export const InteractiveWizardStep: Story = {
 	args: {
 		status: "completed",
-		result: JSON.stringify(manyOptionsPayload),
+		result: JSON.stringify(multipleQuestionsPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: true,
+		onSendAskUserQuestionResponse: fn(),
 	},
 	play: async ({ canvasElement }) => {
 		const canvas = within(canvasElement);
+		const nextButton = canvas.getByRole("button", { name: "Next" });
 
-		expect(canvas.getByText("Validation Strategy")).toBeInTheDocument();
-		expect(canvas.getAllByRole("radio")).toHaveLength(4);
-		expect(canvas.getByText("Pre-push suite")).toBeInTheDocument();
+		expect(canvas.getByText("Question 1 of 2")).toBeInTheDocument();
+		expect(nextButton).toBeDisabled();
+		expect(
+			canvas.queryByText(/Which rollout path should we use/i),
+		).not.toBeInTheDocument();
+
+		await userEvent.click(
+			canvas.getByRole("radio", { name: /incremental migrations/i }),
+		);
+		expect(nextButton).toBeEnabled();
+
+		await userEvent.click(nextButton);
+		expect(canvas.getByText("Question 2 of 2")).toBeInTheDocument();
+		expect(
+			canvas.getByText(/Which rollout path should we use/i),
+		).toBeInTheDocument();
+		expect(canvas.getByRole("button", { name: "Submit" })).toBeDisabled();
+	},
+};
+
+export const SubmittedWizard: Story = {
+	args: {
+		status: "completed",
+		result: JSON.stringify(multipleQuestionsPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: true,
+		onSendAskUserQuestionResponse: fn(),
+	},
+	play: async ({ canvasElement, args }) => {
+		const canvas = within(canvasElement);
+
+		await userEvent.click(
+			canvas.getByRole("radio", { name: /incremental migrations/i }),
+		);
+		await userEvent.click(canvas.getByRole("button", { name: "Next" }));
+		await userEvent.click(canvas.getByRole("radio", { name: /small beta/i }));
+		await userEvent.click(canvas.getByRole("button", { name: "Submit" }));
+
+		if (!args.onSendAskUserQuestionResponse) {
+			throw new Error("Missing ask-user-question response callback.");
+		}
+		expect(args.onSendAskUserQuestionResponse).toHaveBeenCalledWith(
+			[
+				"1. Implementation Approach: Incremental migrations",
+				"2. Release Plan: Small beta",
+			].join("\n"),
+		);
+		expect(canvas.queryAllByRole("radio")).toHaveLength(0);
+		expect(
+			canvas.queryByRole("button", { name: "Next" }),
+		).not.toBeInTheDocument();
+		expect(
+			canvas.queryByRole("button", { name: "Submit" }),
+		).not.toBeInTheDocument();
+		expect(canvas.getByText("Submitted answer")).toBeInTheDocument();
+		expect(canvas.getByText("Incremental migrations")).toBeInTheDocument();
+		expect(canvas.getByText("Small beta")).toBeInTheDocument();
+	},
+};
+
+export const ReadOnlyPreviousCall: Story = {
+	args: {
+		status: "completed",
+		result: JSON.stringify(multipleQuestionsPayload),
+		isChatCompleted: true,
+		isLatestAskUserQuestion: false,
+		onSendAskUserQuestionResponse: fn(),
+	},
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const radios = canvas.getAllByRole("radio");
+
+		expect(radios).toHaveLength(7);
+		expect(radios[0]).toBeDisabled();
+		expect(canvas.getByText("Implementation Approach")).toBeInTheDocument();
+		expect(canvas.getByText("Release Plan")).toBeInTheDocument();
+		expect(
+			canvas.queryByRole("button", { name: "Next" }),
+		).not.toBeInTheDocument();
+		expect(
+			canvas.queryByRole("button", { name: "Submit" }),
+		).not.toBeInTheDocument();
 	},
 };
 

@@ -1,6 +1,9 @@
 import { LoaderIcon, TriangleAlertIcon } from "lucide-react";
-import type React from "react";
+import { type FC, useId, useState } from "react";
+import { Button } from "#/components/Button/Button";
+import { Input } from "#/components/Input/Input";
 import { RadioGroup, RadioGroupItem } from "#/components/RadioGroup/RadioGroup";
+import { cn } from "#/utils/cn";
 import type { ToolStatus } from "./utils";
 
 export type AskUserQuestion = {
@@ -9,20 +12,220 @@ export type AskUserQuestion = {
 	options: Array<{ label: string; description: string }>;
 };
 
+type QuestionAnswer =
+	| {
+			kind: "option";
+			label: string;
+			optionIndex: number;
+	  }
+	| {
+			kind: "other";
+			text: string;
+	  };
+
 type AskUserQuestionToolProps = {
 	questions: AskUserQuestion[];
 	status: ToolStatus;
 	isError: boolean;
 	errorMessage?: string;
+	isChatCompleted?: boolean;
+	isLatestAskUserQuestion?: boolean;
+	onSubmitAnswer?: (message: string) => Promise<void> | void;
 };
 
-export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({
+const OTHER_OPTION_VALUE = "other";
+
+const getQuestionHeader = (
+	question: AskUserQuestion,
+	questionIndex: number,
+): string => question.header || `Question ${questionIndex + 1}`;
+
+const getQuestionText = (question: AskUserQuestion): string =>
+	question.question || "No question provided.";
+
+const formatAnswer = (answer: QuestionAnswer): string =>
+	answer.kind === "other"
+		? `Other: ${answer.text.trim()}`
+		: answer.label || `Option ${answer.optionIndex + 1}`;
+
+const cloneAnswer = (
+	answer: QuestionAnswer | undefined,
+): QuestionAnswer | undefined => {
+	if (!answer) {
+		return undefined;
+	}
+
+	if (answer.kind === "other") {
+		return { kind: "other", text: answer.text };
+	}
+
+	return {
+		kind: "option",
+		label: answer.label,
+		optionIndex: answer.optionIndex,
+	};
+};
+
+const isAnswerValid = (
+	answer: QuestionAnswer | undefined,
+): answer is QuestionAnswer => {
+	if (!answer) {
+		return false;
+	}
+
+	if (answer.kind === "other") {
+		return answer.text.trim().length > 0;
+	}
+
+	return answer.label.trim().length > 0;
+};
+
+const getSelectedValue = (
+	answer: QuestionAnswer | undefined,
+): string | undefined => {
+	if (!answer) {
+		return undefined;
+	}
+
+	if (answer.kind === "other") {
+		return OTHER_OPTION_VALUE;
+	}
+
+	return `option-${answer.optionIndex}`;
+};
+
+const formatOutgoingMessage = (
+	questions: AskUserQuestion[],
+	answers: readonly QuestionAnswer[],
+): string => {
+	if (questions.length === 1) {
+		return formatAnswer(answers[0]);
+	}
+
+	return questions
+		.map((question, questionIndex) => {
+			return `${questionIndex + 1}. ${getQuestionHeader(question, questionIndex)}: ${formatAnswer(answers[questionIndex])}`;
+		})
+		.join("\n");
+};
+
+export const AskUserQuestionTool: FC<AskUserQuestionToolProps> = ({
 	questions,
 	status,
 	isError,
 	errorMessage,
+	isChatCompleted = false,
+	isLatestAskUserQuestion = false,
+	onSubmitAnswer,
 }) => {
+	const idPrefix = useId();
+	const [answers, setAnswers] = useState<Array<QuestionAnswer | undefined>>([]);
+	const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const [submitError, setSubmitError] = useState<string | undefined>();
+	const [submittedAnswers, setSubmittedAnswers] = useState<Array<
+		QuestionAnswer | undefined
+	> | null>(null);
 	const isRunning = status === "running";
+	const hasSubmitted = submittedAnswers !== null;
+	const activeQuestionIndex = Math.min(
+		currentQuestionIndex,
+		Math.max(questions.length - 1, 0),
+	);
+	const currentAnswer = answers[activeQuestionIndex];
+	const isInteractive =
+		isChatCompleted &&
+		status === "completed" &&
+		isLatestAskUserQuestion &&
+		!hasSubmitted &&
+		Boolean(onSubmitAnswer);
+	const canAdvanceToNextQuestion = isAnswerValid(currentAnswer);
+	const canSubmitAllAnswers = questions.every((_, questionIndex) =>
+		isAnswerValid(answers[questionIndex]),
+	);
+
+	const setAnswerAtIndex = (
+		questionIndex: number,
+		nextAnswer: QuestionAnswer | undefined,
+	) => {
+		setAnswers((currentAnswers) => {
+			const nextAnswers = [...currentAnswers];
+			nextAnswers[questionIndex] = nextAnswer;
+			return nextAnswers;
+		});
+		setSubmitError(undefined);
+	};
+
+	const handleOptionChange = (
+		questionIndex: number,
+		question: AskUserQuestion,
+		value: string,
+	) => {
+		if (value === OTHER_OPTION_VALUE) {
+			const previousAnswer = answers[questionIndex];
+			setAnswerAtIndex(
+				questionIndex,
+				previousAnswer?.kind === "other"
+					? previousAnswer
+					: { kind: "other", text: "" },
+			);
+			return;
+		}
+
+		const optionIndex = Number.parseInt(value.replace("option-", ""), 10);
+		const option = question.options[optionIndex];
+		if (!option) {
+			return;
+		}
+
+		setAnswerAtIndex(questionIndex, {
+			kind: "option",
+			label: option.label || `Option ${optionIndex + 1}`,
+			optionIndex,
+		});
+	};
+
+	const handleNext = () => {
+		if (!canAdvanceToNextQuestion) {
+			return;
+		}
+
+		setCurrentQuestionIndex((currentIndex) => {
+			return Math.min(currentIndex + 1, questions.length - 1);
+		});
+		setSubmitError(undefined);
+	};
+
+	const handleSubmit = async () => {
+		if (!onSubmitAnswer || !isInteractive || !canSubmitAllAnswers) {
+			return;
+		}
+
+		const finalizedAnswers = questions.map((_, questionIndex) => {
+			return cloneAnswer(answers[questionIndex]);
+		});
+		if (!finalizedAnswers.every(isAnswerValid)) {
+			return;
+		}
+
+		const outgoingMessage = formatOutgoingMessage(questions, finalizedAnswers);
+		setIsSubmitting(true);
+		setSubmitError(undefined);
+		try {
+			await onSubmitAnswer(outgoingMessage);
+		} catch (error) {
+			setSubmitError(
+				error instanceof Error
+					? error.message
+					: "Failed to submit your answer.",
+			);
+			setIsSubmitting(false);
+			return;
+		}
+
+		setSubmittedAnswers(finalizedAnswers.map(cloneAnswer));
+		setIsSubmitting(false);
+	};
 
 	if (isError) {
 		return (
@@ -40,6 +243,46 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({
 			</div>
 		);
 	}
+
+	if (questions.length === 0) {
+		return (
+			<div className="w-full">
+				{isRunning ? (
+					<div
+						role="status"
+						aria-live="polite"
+						className="flex items-center gap-1.5 py-0.5"
+					>
+						<span className="text-sm text-content-secondary">
+							Asking for clarification...
+						</span>
+						<LoaderIcon
+							data-testid="ask-user-question-loading-icon"
+							className="h-3.5 w-3.5 shrink-0 animate-spin text-content-secondary motion-reduce:animate-none"
+						/>
+					</div>
+				) : (
+					<p className="text-sm italic text-content-secondary">
+						No questions available.
+					</p>
+				)}
+			</div>
+		);
+	}
+
+	const visibleQuestions = hasSubmitted
+		? questions.map((question, questionIndex) => ({ question, questionIndex }))
+		: isInteractive && questions.length > 1
+			? [
+					{
+						question: questions[activeQuestionIndex],
+						questionIndex: activeQuestionIndex,
+					},
+				]
+			: questions.map((question, questionIndex) => ({
+					question,
+					questionIndex,
+				}));
 
 	return (
 		<div className="w-full">
@@ -59,12 +302,21 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({
 				</div>
 			)}
 
-			{questions.length > 0 ? (
-				<div className="space-y-5">
-					{questions.map((question, questionIndex) => {
-						const questionHeaderId = `ask-user-question-header-${questionIndex}`;
-						const questionTextId = `ask-user-question-text-${questionIndex}`;
+			<div className="space-y-5">
+				{visibleQuestions.map(({ question, questionIndex }) => {
+					const questionHeader = getQuestionHeader(question, questionIndex);
+					const questionText = getQuestionText(question);
+					const questionIdBase = `${idPrefix}-question-${questionIndex}`;
+					const questionHeaderId = `${questionIdBase}-header`;
+					const questionTextId = `${questionIdBase}-text`;
+					const answer = (submittedAnswers ?? answers)[questionIndex];
+					const isOtherSelected = answer?.kind === "other";
+					const optionCount = question.options.length;
+					const showSubmittedAnswer = hasSubmitted;
+					const showProgress =
+						isInteractive && questions.length > 1 && !hasSubmitted;
 
+					if (showSubmittedAnswer) {
 						return (
 							<div
 								key={`${question.header}-${question.question}-${questionIndex}`}
@@ -75,62 +327,181 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({
 										id={questionHeaderId}
 										className="text-xs font-medium text-content-secondary"
 									>
-										{question.header || `Question ${questionIndex + 1}`}
+										{questionHeader}
 									</p>
 									<p
 										id={questionTextId}
 										className="whitespace-pre-wrap text-sm text-content-primary"
 									>
-										{question.question || "No question provided."}
+										{questionText}
 									</p>
 								</div>
-
-								{question.options.length > 0 ? (
-									<RadioGroup
-										aria-labelledby={`${questionHeaderId} ${questionTextId}`}
-										className="space-y-1"
-										name={`ask-user-question-${questionIndex}`}
-									>
-										{question.options.map((option, optionIndex) => {
-											const optionId = `ask-user-question-${questionIndex}-option-${optionIndex}`;
-
-											return (
-												<label
-													key={`${option.label}-${option.description}-${optionIndex}`}
-													htmlFor={optionId}
-													className="grid cursor-pointer gap-x-3 gap-y-0.5 py-1.5"
-													style={{ gridTemplateColumns: "auto 1fr" }}
-												>
-													<RadioGroupItem
-														className="row-span-2 self-center"
-														id={optionId}
-														value={`${option.label}-${optionIndex}`}
-													/>
-													<span className="text-sm font-medium text-content-primary">
-														{option.label || `Option ${optionIndex + 1}`}
-													</span>
-													<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
-														{option.description || "No description provided."}
-													</p>
-												</label>
-											);
-										})}
-									</RadioGroup>
-								) : (
-									<p className="text-sm italic text-content-secondary">
-										No options provided.
+								<div className="rounded-md border border-solid border-border-default bg-surface-secondary px-3 py-2">
+									<p className="text-xs font-medium text-content-secondary">
+										Submitted answer
 									</p>
-								)}
+									<p className="mt-1 whitespace-pre-wrap text-sm text-content-primary">
+										{answer ? formatAnswer(answer) : "No answer recorded."}
+									</p>
+								</div>
 							</div>
 						);
-					})}
+					}
+
+					return (
+						<div
+							key={`${question.header}-${question.question}-${questionIndex}`}
+							className="space-y-3"
+						>
+							{showProgress && (
+								<p className="text-xs font-medium text-content-secondary">
+									Question {questionIndex + 1} of {questions.length}
+								</p>
+							)}
+							<div className="space-y-1.5">
+								<p
+									id={questionHeaderId}
+									className="text-xs font-medium text-content-secondary"
+								>
+									{questionHeader}
+								</p>
+								<p
+									id={questionTextId}
+									className="whitespace-pre-wrap text-sm text-content-primary"
+								>
+									{questionText}
+								</p>
+							</div>
+							<RadioGroup
+								aria-labelledby={`${questionHeaderId} ${questionTextId}`}
+								className="space-y-1"
+								name={`${questionIdBase}-options`}
+								value={getSelectedValue(answer)}
+								onValueChange={(value) => {
+									handleOptionChange(questionIndex, question, value);
+								}}
+							>
+								{question.options.map((option, optionIndex) => {
+									const optionId = `${questionIdBase}-option-${optionIndex}`;
+
+									return (
+										<label
+											key={`${option.label}-${option.description}-${optionIndex}`}
+											htmlFor={optionId}
+											className={cn(
+												"grid gap-x-3 gap-y-0.5 py-1.5",
+												isInteractive && !isSubmitting
+													? "cursor-pointer"
+													: "cursor-default",
+											)}
+											style={{ gridTemplateColumns: "auto 1fr" }}
+										>
+											<RadioGroupItem
+												className="row-span-2 self-center"
+												disabled={!isInteractive || isSubmitting}
+												id={optionId}
+												value={`option-${optionIndex}`}
+											/>
+											<span className="text-sm font-medium text-content-primary">
+												{option.label || `Option ${optionIndex + 1}`}
+											</span>
+											<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
+												{option.description || "No description provided."}
+											</p>
+										</label>
+									);
+								})}
+								{(() => {
+									const otherOptionId = `${questionIdBase}-option-${optionCount}`;
+									return (
+										<div className="space-y-2">
+											<label
+												htmlFor={otherOptionId}
+												className={cn(
+													"grid gap-x-3 gap-y-0.5 py-1.5",
+													isInteractive && !isSubmitting
+														? "cursor-pointer"
+														: "cursor-default",
+												)}
+												style={{ gridTemplateColumns: "auto 1fr" }}
+											>
+												<RadioGroupItem
+													className="row-span-2 self-center"
+													disabled={!isInteractive || isSubmitting}
+													id={otherOptionId}
+													value={OTHER_OPTION_VALUE}
+												/>
+												<span className="text-sm font-medium text-content-primary">
+													Other
+												</span>
+												<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
+													Share a different answer.
+												</p>
+											</label>
+											{isOtherSelected && (
+												<div className="pl-7">
+													<Input
+														autoFocus={isInteractive}
+														aria-label={`Other response for ${questionHeader}`}
+														disabled={!isInteractive || isSubmitting}
+														placeholder="Describe another answer"
+														value={answer?.kind === "other" ? answer.text : ""}
+														onChange={(event) => {
+															setAnswerAtIndex(questionIndex, {
+																kind: "other",
+																text: event.currentTarget.value,
+															});
+														}}
+													/>
+												</div>
+											)}
+										</div>
+									);
+								})()}
+							</RadioGroup>
+						</div>
+					);
+				})}
+			</div>
+
+			{submitError && (
+				<div
+					role="alert"
+					className="mt-3 flex items-center gap-1.5 text-sm text-content-destructive"
+				>
+					<TriangleAlertIcon className="h-3.5 w-3.5 shrink-0" />
+					<span>{submitError}</span>
 				</div>
-			) : (
-				!isRunning && (
-					<p className="text-sm italic text-content-secondary">
-						No questions available.
-					</p>
-				)
+			)}
+
+			{isInteractive && (
+				<div className="mt-4 flex items-center gap-2">
+					{questions.length > 1 &&
+					activeQuestionIndex < questions.length - 1 ? (
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={!canAdvanceToNextQuestion || isSubmitting}
+							onClick={handleNext}
+						>
+							Next
+						</Button>
+					) : (
+						<Button
+							size="sm"
+							variant="outline"
+							disabled={!canSubmitAllAnswers || isSubmitting}
+							onClick={() => {
+								void handleSubmit();
+							}}
+						>
+							{isSubmitting && (
+								<LoaderIcon className="h-3.5 w-3.5 animate-spin motion-reduce:animate-none" />
+							)}
+							{isSubmitting ? "Submitting..." : "Submit"}
+						</Button>
+					)}
+				</div>
 			)}
 		</div>
 	);

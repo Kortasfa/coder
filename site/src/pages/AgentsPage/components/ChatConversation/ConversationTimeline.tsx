@@ -254,6 +254,9 @@ export const BlockList: FC<{
 	onImageClick?: (src: string) => void;
 	onTextFileClick?: (content: string) => void;
 	onImplementPlan?: () => void;
+	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
+	isChatCompleted?: boolean;
+	latestAskUserQuestionToolId?: string;
 	urlTransform?: UrlTransform;
 }> = ({
 	blocks,
@@ -268,6 +271,9 @@ export const BlockList: FC<{
 	onImageClick,
 	onTextFileClick,
 	onImplementPlan,
+	onSendAskUserQuestionResponse,
+	isChatCompleted,
+	latestAskUserQuestionToolId,
 	urlTransform,
 }) => {
 	const toolByID = new Map(tools.map((tool) => [tool.id, tool]));
@@ -372,6 +378,11 @@ export const BlockList: FC<{
 								mcpServerConfigId={tool.mcpServerConfigId}
 								mcpServers={mcpServers}
 								onImplementPlan={onImplementPlan}
+								onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
+								isChatCompleted={isChatCompleted}
+								isLatestAskUserQuestion={
+									tool.id === latestAskUserQuestionToolId
+								}
 								modelIntent={tool.modelIntent}
 							/>
 						);
@@ -414,6 +425,9 @@ export const BlockList: FC<{
 					mcpServerConfigId={tool.mcpServerConfigId}
 					mcpServers={mcpServers}
 					onImplementPlan={onImplementPlan}
+					onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
+					isChatCompleted={isChatCompleted}
+					isLatestAskUserQuestion={tool.id === latestAskUserQuestionToolId}
 					modelIntent={tool.modelIntent}
 				/>
 			))}
@@ -443,6 +457,9 @@ const ChatMessageItem = memo<{
 	subagentTitles?: Map<string, string>;
 	computerUseSubagentIds?: Set<string>;
 	showDesktopPreviews?: boolean;
+	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
+	isChatCompleted?: boolean;
+	latestAskUserQuestionToolId?: string;
 }>(
 	({
 		message,
@@ -453,6 +470,9 @@ const ChatMessageItem = memo<{
 		hideActions = false,
 		fadeFromBottom = false,
 		onImplementPlan,
+		onSendAskUserQuestionResponse,
+		isChatCompleted,
+		latestAskUserQuestionToolId,
 
 		urlTransform,
 		mcpServers,
@@ -617,6 +637,11 @@ const ChatMessageItem = memo<{
 										computerUseSubagentIds={computerUseSubagentIds}
 										showDesktopPreviews={showDesktopPreviews}
 										onImplementPlan={onImplementPlan}
+										onSendAskUserQuestionResponse={
+											onSendAskUserQuestionResponse
+										}
+										isChatCompleted={isChatCompleted}
+										latestAskUserQuestionToolId={latestAskUserQuestionToolId}
 										onImageClick={setPreviewImage}
 										onTextFileClick={setPreviewText}
 										urlTransform={urlTransform}
@@ -994,6 +1019,8 @@ interface ConversationTimelineProps {
 	) => void;
 	editingMessageId?: number | null;
 	onImplementPlan?: () => void;
+	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
+	isChatCompleted?: boolean;
 	urlTransform?: UrlTransform;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	computerUseSubagentIds?: Set<string>;
@@ -1008,6 +1035,8 @@ export const ConversationTimeline = memo<ConversationTimelineProps>(
 		onEditUserMessage,
 		editingMessageId,
 		onImplementPlan,
+		onSendAskUserQuestionResponse,
+		isChatCompleted,
 		urlTransform,
 		mcpServers,
 		computerUseSubagentIds,
@@ -1029,6 +1058,15 @@ export const ConversationTimeline = memo<ConversationTimelineProps>(
 				}
 				if (found) {
 					afterEditingMessageIds.add(entry.message.id);
+				}
+			}
+		}
+
+		let latestAskUserQuestionToolId: string | undefined;
+		for (const { parsed } of parsedMessages) {
+			for (const tool of parsed.tools) {
+				if (tool.name === "ask_user_question") {
+					latestAskUserQuestionToolId = tool.id;
 				}
 			}
 		}
@@ -1058,6 +1096,9 @@ export const ConversationTimeline = memo<ConversationTimelineProps>(
 							message={message}
 							parsed={parsed}
 							onImplementPlan={onImplementPlan}
+							onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
+							isChatCompleted={isChatCompleted}
+							latestAskUserQuestionToolId={latestAskUserQuestionToolId}
 							urlTransform={urlTransform}
 							isAfterEditingMessage={afterEditingMessageIds.has(message.id)}
 							hideActions={!isLastInChain}

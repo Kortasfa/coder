@@ -50,6 +50,7 @@ interface ChatPageTimelineProps {
 	) => void;
 	editingMessageId?: number | null;
 	onImplementPlan?: () => void;
+	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
 	urlTransform?: UrlTransform;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 }
@@ -61,12 +62,15 @@ export const ChatPageTimeline: FC<ChatPageTimelineProps> = ({
 	onEditUserMessage,
 	editingMessageId,
 	onImplementPlan,
+	onSendAskUserQuestionResponse,
 	urlTransform,
 	mcpServers,
 }) => {
 	const [chatFullWidth] = useChatFullWidth();
 	const messagesByID = useChatSelector(store, selectMessagesByID);
 	const orderedMessageIDs = useChatSelector(store, selectOrderedMessageIDs);
+	const chatStatus = useChatSelector(store, selectChatStatus);
+	const isChatCompleted = chatStatus === "completed";
 
 	const messages = orderedMessageIDs
 		.map((messageID) => {
@@ -106,6 +110,8 @@ export const ChatPageTimeline: FC<ChatPageTimelineProps> = ({
 					onEditUserMessage={onEditUserMessage}
 					editingMessageId={editingMessageId}
 					onImplementPlan={onImplementPlan}
+					onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
+					isChatCompleted={isChatCompleted}
 					urlTransform={urlTransform}
 					mcpServers={mcpServers}
 					computerUseSubagentIds={computerUseSubagentIds}

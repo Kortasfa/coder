@@ -77,6 +77,9 @@ interface ToolProps extends Omit<ComponentPropsWithRef<"div">, "children"> {
 	/** Available MCP server configs for icon/name lookup. */
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	onImplementPlan?: () => void;
+	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
+	isChatCompleted?: boolean;
+	isLatestAskUserQuestion?: boolean;
 	/** Human-readable intent extracted from the model's tool-call args. */
 	modelIntent?: string;
 }
@@ -95,6 +98,9 @@ type ToolRendererProps = {
 	showDesktopPreviews?: boolean;
 	subagentStatusOverrides?: Map<string, string>;
 	onImplementPlan?: () => void;
+	onSendAskUserQuestionResponse?: (message: string) => Promise<void> | void;
+	isChatCompleted?: boolean;
+	isLatestAskUserQuestion?: boolean;
 	mcpServerConfigId?: string;
 	mcpServers?: readonly TypesGen.MCPServerConfig[];
 	modelIntent?: string;
@@ -582,6 +588,9 @@ const AskUserQuestionRenderer: FC<ToolRendererProps> = ({
 	status,
 	result,
 	isError,
+	onSendAskUserQuestionResponse,
+	isChatCompleted,
+	isLatestAskUserQuestion,
 }) => {
 	const parsedArgs = parseArgs(args);
 	const questionsFromArgs = parsedArgs
@@ -606,6 +615,9 @@ const AskUserQuestionRenderer: FC<ToolRendererProps> = ({
 			status={status}
 			isError={isError}
 			errorMessage={errorMessage || undefined}
+			onSubmitAnswer={onSendAskUserQuestionResponse}
+			isChatCompleted={isChatCompleted}
+			isLatestAskUserQuestion={isLatestAskUserQuestion}
 		/>
 	);
 };
@@ -901,6 +913,9 @@ export const Tool = memo(
 		mcpServerConfigId,
 		mcpServers,
 		onImplementPlan,
+		onSendAskUserQuestionResponse,
+		isChatCompleted,
+		isLatestAskUserQuestion,
 		modelIntent,
 		ref,
 		...props
@@ -934,6 +949,9 @@ export const Tool = memo(
 					mcpServerConfigId={mcpServerConfigId}
 					mcpServers={mcpServers}
 					onImplementPlan={onImplementPlan}
+					onSendAskUserQuestionResponse={onSendAskUserQuestionResponse}
+					isChatCompleted={isChatCompleted}
+					isLatestAskUserQuestion={isLatestAskUserQuestion}
 					modelIntent={modelIntent}
 				/>
 			</div>
