@@ -1077,3 +1077,69 @@ export const ScrollRepinnedAfterWheelDeferredAppend: Story = {
 		).toBeNull();
 	},
 };
+
+const editSubmitScrollStore = buildStoreWithMessages(buildLongConversation(30));
+
+/**
+ * Regression: when submitting an edited message, the optimistic cache
+ * truncation removes messages after the edit point. The scroll position
+ * must settle at the bottom of the now-shorter conversation without the
+ * sticky user message cycling through prior messages. Previously,
+ * scrollToBottom fired before the truncation, creating a scroll/content
+ * mismatch that caused IntersectionObserver cascades.
+ */
+export const ScrollStableAfterEditTruncation: Story = {
+	parameters: { chromatic: { disableSnapshot: true } },
+	decorators: scrollStoryDecorators,
+	render: () => <StoryAgentChatPageView store={editSubmitScrollStore} />,
+	play: async ({ canvasElement }) => {
+		const canvas = within(canvasElement);
+		const scrollContainer = canvas.getByTestId("scroll-container");
+
+		await waitForScrollOverflow(scrollContainer);
+
+		// Wait for the initial bottom pin to settle.
+		await waitFor(
+			() => {
+				const dist =
+					scrollContainer.scrollHeight -
+					scrollContainer.scrollTop -
+					scrollContainer.clientHeight;
+				expect(dist).toBeLessThan(5);
+			},
+			{ timeout: 2000 },
+		);
+
+		// Simulate the optimistic truncation that happens when an
+		// edited message is submitted: keep only messages before the
+		// edit point, plus a replacement message. This mirrors what
+		// projectEditedConversationIntoCache does.
+		const existing = getStoreMessages(editSubmitScrollStore);
+		const editIndex = 10; // Edit the 10th message (roughly mid-conversation)
+		const truncated = existing.slice(0, editIndex);
+		truncated.push(
+			buildMessage(existing[editIndex].id, "user", "Edited question"),
+		);
+		editSubmitScrollStore.replaceMessages(truncated);
+
+		// After truncation the conversation is shorter. The scroll
+		// position should settle at or near the bottom of the
+		// truncated content without wild jumps.
+		await waitFor(
+			() => {
+				const dist =
+					scrollContainer.scrollHeight -
+					scrollContainer.scrollTop -
+					scrollContainer.clientHeight;
+				expect(dist).toBeLessThan(5);
+			},
+			{ timeout: 2000 },
+		);
+
+		// The scroll-to-bottom button should not appear since we're
+		// at the bottom of the truncated conversation.
+		expect(
+			canvas.queryByRole("button", { name: "Scroll to bottom" }),
+		).toBeNull();
+	},
+};
