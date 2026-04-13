@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
-	"github.com/google/uuid"
 
 	"github.com/coder/coder/v2/codersdk/workspacesdk"
 )
@@ -17,7 +16,7 @@ const maxProposePlanSize = 32 * 1024 // 32 KiB
 // ProposePlanOptions configures the propose_plan tool.
 type ProposePlanOptions struct {
 	GetWorkspaceConn func(context.Context) (workspacesdk.AgentConn, error)
-	StoreFile        func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error)
+	StoreFile        StoreFileFunc
 }
 
 // ProposePlanArgs are the arguments for the propose_plan tool.
@@ -53,7 +52,7 @@ func executeProposePlanTool(
 	ctx context.Context,
 	conn workspacesdk.AgentConn,
 	args ProposePlanArgs,
-	storeFile func(ctx context.Context, name string, mediaType string, data []byte) (uuid.UUID, error),
+	storeFile StoreFileFunc,
 ) (fantasy.ToolResponse, error) {
 	path := strings.TrimSpace(args.Path)
 	if path == "" {
