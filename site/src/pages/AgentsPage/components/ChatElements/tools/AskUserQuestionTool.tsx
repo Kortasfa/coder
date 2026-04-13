@@ -9,7 +9,7 @@ export type AskUserQuestion = {
 	options: Array<{ label: string; description: string }>;
 };
 
-export type AskUserQuestionToolProps = {
+type AskUserQuestionToolProps = {
 	questions: AskUserQuestion[];
 	status: ToolStatus;
 	isError: boolean;
@@ -102,14 +102,14 @@ export const AskUserQuestionTool: React.FC<AskUserQuestionToolProps> = ({
 													style={{ gridTemplateColumns: "auto 1fr" }}
 												>
 													<RadioGroupItem
-														className="mt-0.5"
+														className="row-span-2 self-center"
 														id={optionId}
 														value={`${option.label}-${optionIndex}`}
 													/>
 													<span className="text-sm font-medium text-content-primary">
 														{option.label || `Option ${optionIndex + 1}`}
 													</span>
-													<p className="col-start-2 m-0 whitespace-pre-wrap text-sm text-content-secondary">
+													<p className="m-0 whitespace-pre-wrap text-sm text-content-secondary">
 														{option.description || "No description provided."}
 													</p>
 												</label>
