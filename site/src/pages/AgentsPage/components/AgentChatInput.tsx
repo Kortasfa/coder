@@ -9,7 +9,6 @@ import {
 	PencilIcon,
 	PlusIcon,
 	ServerIcon,
-	SettingsIcon,
 	Square,
 	XIcon,
 } from "lucide-react";
@@ -25,7 +24,6 @@ import { Link } from "react-router";
 import type * as TypesGen from "#/api/typesGenerated";
 import type { ChatMessagePart, ChatQueuedMessage } from "#/api/typesGenerated";
 import { Alert, AlertDescription } from "#/components/Alert/Alert";
-import { Avatar } from "#/components/Avatar/Avatar";
 import { Button } from "#/components/Button/Button";
 import {
 	Command,
@@ -35,11 +33,6 @@ import {
 	CommandItem,
 	CommandList,
 } from "#/components/Command/Command";
-import {
-	DropdownMenu,
-	DropdownMenuContent,
-	DropdownMenuTrigger,
-} from "#/components/DropdownMenu/DropdownMenu";
 import { ExternalImage } from "#/components/ExternalImage/ExternalImage";
 import {
 	Popover,
@@ -316,37 +309,8 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 	);
 	const [plusMenuOpen, setPlusMenuOpen] = useState(false);
 	const [workspacePickerOpen, setWorkspacePickerOpen] = useState(false);
-	const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
-	const [settingsOrgPickerOpen, setSettingsOrgPickerOpen] = useState(false);
 	const [mcpConnectingId, setMcpConnectingId] = useState<string | null>(null);
 	const mcpPopupRef = useRef<Window | null>(null);
-
-	// Ref for the inline selector wrapper used by the overflow hook
-	// to detect when the org/model selectors don't fit.
-	const selectorWrapperRef = useRef<HTMLDivElement>(null);
-	// Align item count with the actual rendering guard so
-	// useOverflowCount operates on the correct child count.
-	const showOrgInline = showOrgSelector && !!orgOptions;
-	const selectorItemCount = (showOrgInline ? 1 : 0) + 1;
-	const selectorOverflow = useOverflowCount(
-		selectorWrapperRef,
-		selectorItemCount,
-	);
-	const selectorsCollapsed = selectorOverflow > 0;
-
-	// Close the settings menu and its sub-popovers when the
-	// overflow state changes so stale popovers don't linger.
-	useEffect(() => {
-		if (selectorsCollapsed) {
-			// Selectors just collapsed into the settings menu —
-			// nothing to close.
-			return;
-		}
-		// Selectors expanded back inline — dismiss the dropdown
-		// so it doesn't overlay the now-visible inline selectors.
-		setSettingsMenuOpen(false);
-		setSettingsOrgPickerOpen(false);
-	}, [selectorsCollapsed]);
 
 	const [hasFileReferences, setHasFileReferences] = useState(false);
 
@@ -699,6 +663,36 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 				onDragLeave={onAttach ? handleDragLeave : undefined}
 				onDrop={onAttach ? handleDrop : undefined}
 			>
+				{/* Selector row — org and model pickers at the top of the composer. */}
+				{(showOrgSelector || !isModelCatalogLoading) && (
+					<div className="flex items-center gap-1 px-2.5 pt-1">
+						{showOrgSelector && orgOptions && (
+							<CompactOrgSelector
+								value={selectedOrg ?? null}
+								onChange={onOrgChange ?? (() => {})}
+								options={orgOptions}
+								disabled={isOrgDisabled || isDisabled || !onOrgChange}
+								dropdownSide="bottom"
+								dropdownAlign="start"
+							/>
+						)}
+						{isModelCatalogLoading ? (
+							<Skeleton className="h-6 w-24 rounded" />
+						) : (
+							<ModelSelector
+								value={selectedModel}
+								onValueChange={onModelChange}
+								options={modelOptions}
+								disabled={isDisabled}
+								placeholder={modelSelectorPlaceholder}
+								formatProviderLabel={formatProviderLabel}
+								dropdownSide="bottom"
+								dropdownAlign="start"
+							/>
+						)}
+					</div>
+				)}
+
 				{editingQueuedMessageID !== null && (
 					<div className="flex items-center justify-between border-b border-border-default/70 bg-surface-primary/25 px-3 py-1.5">
 						<span className="text-sm text-content-secondary">
@@ -946,167 +940,6 @@ export const AgentChatInput: FC<AgentChatInputProps> = ({
 								)}
 							</PopoverContent>
 						</Popover>
-						{/* Settings dropdown — visible when selectors overflow */}
-						{selectorsCollapsed && (
-							<DropdownMenu
-								open={settingsMenuOpen}
-								onOpenChange={setSettingsMenuOpen}
-							>
-								<DropdownMenuTrigger asChild>
-									<Button
-										type="button"
-										variant="subtle"
-										size="icon"
-										className="size-7 shrink-0 rounded-full [&>svg]:!size-icon-sm [&>svg]:p-0"
-										disabled={isDisabled}
-										aria-label="Chat settings"
-									>
-										<SettingsIcon />
-									</Button>
-								</DropdownMenuTrigger>
-								<DropdownMenuContent
-									side="bottom"
-									align="start"
-									className="w-auto min-w-[200px] p-1"
-								>
-									{showOrgSelector && orgOptions && (
-										<Popover
-											open={settingsOrgPickerOpen}
-											onOpenChange={
-												isOrgDisabled || !onOrgChange
-													? undefined
-													: setSettingsOrgPickerOpen
-											}
-										>
-											<PopoverTrigger asChild>
-												<button
-													type="button"
-													disabled={isOrgDisabled || !onOrgChange}
-													className="group flex h-8 w-full cursor-pointer items-center gap-1.5 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors hover:text-content-primary disabled:cursor-not-allowed disabled:opacity-50"
-												>
-													{selectedOrg ? (
-														<>
-															<Avatar
-																size="sm"
-																src={selectedOrg.icon}
-																fallback={selectedOrg.display_name}
-															/>
-															<span className="truncate">
-																{selectedOrg.display_name || selectedOrg.name}
-															</span>
-														</>
-													) : (
-														<span>Organization</span>
-													)}
-													<ChevronRightIcon
-														className={cn(
-															"ml-auto size-icon-sm transition-transform",
-															settingsOrgPickerOpen && "rotate-180",
-														)}
-													/>
-												</button>
-											</PopoverTrigger>
-											<PopoverContent
-												side="right"
-												align="start"
-												sideOffset={8}
-												className="w-64 p-0"
-											>
-												<Command loop>
-													<CommandInput
-														placeholder="Find organization…"
-														className="text-xs"
-													/>
-													<CommandList>
-														<CommandEmpty className="text-xs">
-															No organizations found.
-														</CommandEmpty>
-														<CommandGroup>
-															{orgOptions.map((org) => (
-																<CommandItem
-																	className="text-xs font-normal"
-																	key={org.id}
-																	value={`${org.display_name} ${org.name}`}
-																	onSelect={() => {
-																		onOrgChange?.(org);
-																		setSettingsOrgPickerOpen(false);
-																		setSettingsMenuOpen(false);
-																	}}
-																>
-																	<Avatar
-																		size="sm"
-																		src={org.icon}
-																		fallback={org.display_name}
-																	/>
-																	<span className="truncate">
-																		{org.display_name || org.name}
-																	</span>
-																	{selectedOrg?.id === org.id && (
-																		<Check className="ml-auto size-icon-sm shrink-0" />
-																	)}
-																</CommandItem>
-															))}
-														</CommandGroup>
-													</CommandList>
-												</Command>
-											</PopoverContent>
-										</Popover>
-									)}
-									<ModelSelector
-										value={selectedModel}
-										onValueChange={(val) => {
-											onModelChange(val);
-											setSettingsMenuOpen(false);
-										}}
-										options={modelOptions}
-										disabled={isDisabled}
-										placeholder={modelSelectorPlaceholder}
-										formatProviderLabel={formatProviderLabel}
-										dropdownSide="right"
-										dropdownAlign="start"
-										className="w-full justify-start [&>svg]:ml-auto [&>svg]:-rotate-90"
-									/>{" "}
-								</DropdownMenuContent>
-							</DropdownMenu>
-						)}
-						{/* Inline selectors — hidden when overflowed into settings */}
-						<div
-							ref={selectorWrapperRef}
-							className="flex min-w-0 items-center gap-1 overflow-hidden"
-						>
-							{showOrgSelector && orgOptions && (
-								<CompactOrgSelector
-									value={selectedOrg ?? null}
-									onChange={onOrgChange ?? (() => {})}
-									options={orgOptions}
-									disabled={isOrgDisabled || isDisabled || !onOrgChange}
-									dropdownSide="top"
-									dropdownAlign="start"
-									className={selectorsCollapsed ? "invisible" : undefined}
-								/>
-							)}
-							{isModelCatalogLoading ? (
-								<Skeleton className="h-6 w-24 rounded" />
-							) : (
-								<ModelSelector
-									value={selectedModel}
-									onValueChange={onModelChange}
-									options={modelOptions}
-									disabled={isDisabled}
-									placeholder={modelSelectorPlaceholder}
-									formatProviderLabel={formatProviderLabel}
-									dropdownSide="top"
-									dropdownAlign="center"
-									className={selectorsCollapsed ? "invisible" : undefined}
-								/>
-							)}
-							{/* Invisible pill so useOverflowCount can
-							 * reserve space for the settings button. */}
-							<span
-								className="invisible inline-block w-7 shrink-0"
-								aria-hidden="true"
-							/>
-						</div>
 						{/* Badge row — all badges and the pill always
 						 * render so the DOM structure never changes.
 						 * Overflow badges use invisible + order-1 to
