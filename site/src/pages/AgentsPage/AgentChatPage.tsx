@@ -941,7 +941,6 @@ const AgentChatPage: FC = () => {
 				store.setChatStatus("running");
 				store.clearStreamState();
 			});
-			scrollToBottomRef.current?.();
 			try {
 				await editMessage({
 					messageId: editedMessageID,
@@ -953,6 +952,13 @@ const AgentChatPage: FC = () => {
 				handleUsageLimitError(error);
 				throw error;
 			}
+			// Scroll after the mutation resolves so the optimistic
+			// truncation and server reconciliation have already been
+			// applied to the DOM. Scrolling before this point causes
+			// the sticky user message to cycle through prior messages
+			// as the IntersectionObserver reacts to rapid layout
+			// shifts between the old and truncated content.
+			scrollToBottomRef.current?.();
 			return;
 		}
 		const selectedModelConfigID = effectiveSelectedModel || undefined;

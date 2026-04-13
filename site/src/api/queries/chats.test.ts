@@ -758,7 +758,7 @@ describe("mutation invalidation scope", () => {
 		}
 	});
 
-	it("editChatMessage invalidates only chat detail and messages", async () => {
+	it("editChatMessage invalidates only chat detail, not messages", async () => {
 		const queryClient = createTestQueryClient();
 		const chatId = "chat-1";
 		seedAllActiveQueries(queryClient, chatId);
@@ -768,18 +768,21 @@ describe("mutation invalidation scope", () => {
 
 		await new Promise((r) => setTimeout(r, 0));
 
-		// These two should still be invalidated — editing changes
-		// message content and potentially the chat's updated_at.
+		// Chat metadata should still be invalidated — editing
+		// changes the chat's updated_at.
 		const chatState = queryClient.getQueryState(chatKey(chatId));
 		expect(chatState?.isInvalidated, "chatKey should be invalidated").toBe(
 			true,
 		);
 
+		// Messages are NOT invalidated — the per-chat WebSocket
+		// delivers the post-edit conversation via FullRefresh,
+		// same as createChatMessage.
 		const messagesState = queryClient.getQueryState(chatMessagesKey(chatId));
 		expect(
 			messagesState?.isInvalidated,
-			"chatMessagesKey should be invalidated",
-		).toBe(true);
+			"chatMessagesKey should NOT be invalidated",
+		).not.toBe(true);
 	});
 
 	// Shared type for the infinite messages cache shape used by

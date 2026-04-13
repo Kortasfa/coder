@@ -670,18 +670,15 @@ export const editChatMessage = (queryClient: QueryClient, chatId: string) => ({
 		);
 	},
 	onSettled: () => {
-		// Always reconcile with the server regardless of whether
-		// the mutation succeeded or failed. On success this picks
-		// up the replacement message; on failure it confirms the
-		// restore from onError matches the server state. Use exact
-		// matching to avoid cascading to unrelated queries
-		// (diff-status, diff-contents, cost summaries, etc.).
+		// Refresh chat metadata (status, title, etc.). The messages
+		// query is intentionally NOT invalidated here — the per-chat
+		// WebSocket delivers the post-edit conversation via
+		// FullRefresh, same as createChatMessage. Invalidating
+		// chatMessagesKey would trigger a redundant REST refetch
+		// that causes extra store mutations while the sticky user
+		// message is settling after the optimistic truncation.
 		void queryClient.invalidateQueries({
 			queryKey: chatKey(chatId),
-			exact: true,
-		});
-		void queryClient.invalidateQueries({
-			queryKey: chatMessagesKey(chatId),
 			exact: true,
 		});
 	},
