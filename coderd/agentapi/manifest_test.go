@@ -336,6 +336,7 @@ func TestGetManifest(t *testing.T) {
 		}).Return(metadata, nil)
 		mDB.EXPECT().GetWorkspaceAgentDevcontainersByAgentID(gomock.Any(), agent.ID).Return(devcontainers, nil)
 		mDB.EXPECT().GetWorkspaceByID(gomock.Any(), workspace.ID).Return(workspace, nil)
+		mDB.EXPECT().ListUserSecretsWithValues(gomock.Any(), workspace.OwnerID).Return(nil, nil)
 
 		got, err := api.GetManifest(context.Background(), &agentproto.GetManifestRequest{})
 		require.NoError(t, err)
@@ -362,6 +363,7 @@ func TestGetManifest(t *testing.T) {
 			Apps:          protoApps,
 			Metadata:      protoMetadata,
 			Devcontainers: protoDevcontainers,
+			Secrets:       []*agentproto.WorkspaceSecret{},
 		}
 
 		// Log got and expected with spew.
@@ -401,6 +403,7 @@ func TestGetManifest(t *testing.T) {
 		}).Return([]database.WorkspaceAgentMetadatum{}, nil)
 		mDB.EXPECT().GetWorkspaceAgentDevcontainersByAgentID(gomock.Any(), childAgent.ID).Return([]database.WorkspaceAgentDevcontainer{}, nil)
 		mDB.EXPECT().GetWorkspaceByID(gomock.Any(), workspace.ID).Return(workspace, nil)
+		mDB.EXPECT().ListUserSecretsWithValues(gomock.Any(), workspace.OwnerID).Return(nil, nil)
 
 		got, err := api.GetManifest(context.Background(), &agentproto.GetManifestRequest{})
 		require.NoError(t, err)
@@ -427,6 +430,7 @@ func TestGetManifest(t *testing.T) {
 			Apps:          []*agentproto.WorkspaceApp{},
 			Metadata:      []*agentproto.WorkspaceAgentMetadata_Description{},
 			Devcontainers: []*agentproto.WorkspaceAgentDevcontainer{},
+			Secrets:       []*agentproto.WorkspaceSecret{},
 		}
 
 		require.Equal(t, expected, got)
@@ -522,6 +526,7 @@ func TestGetManifest(t *testing.T) {
 		}).Return(metadata, nil)
 		mDB.EXPECT().GetWorkspaceAgentDevcontainersByAgentID(gomock.Any(), agent.ID).Return(devcontainers, nil)
 		mDB.EXPECT().GetWorkspaceByID(gomock.Any(), workspace.ID).Return(workspace, nil)
+		mDB.EXPECT().ListUserSecretsWithValues(gomock.Any(), workspace.OwnerID).Return(nil, nil)
 
 		got, err := api.GetManifest(context.Background(), &agentproto.GetManifestRequest{})
 		require.NoError(t, err)
@@ -547,6 +552,7 @@ func TestGetManifest(t *testing.T) {
 			Apps:          protoApps,
 			Metadata:      protoMetadata,
 			Devcontainers: protoDevcontainers,
+			Secrets:       []*agentproto.WorkspaceSecret{},
 		}
 
 		// Log got and expected with spew.

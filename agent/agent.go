@@ -1283,6 +1283,15 @@ func (a *agent) handleManifest(manifestOK *checkpoint) func(ctx context.Context,
 		manifestOK.complete(nil)
 		sentResult = true
 
+		// Write secret files eagerly on every manifest fetch so they are
+		// available before startup scripts run. Env var injection happens
+		// lazily per-session in updateCommandEnv.
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			a.logger.Warn(ctx, "failed to resolve home directory for secret files", slog.Error(err))
+		}
+		writeSecretFiles(ctx, a.logger, a.filesystem, homeDir, manifest.Secrets)
+
 		// The startup script should only execute on the first run!
 		if oldManifest == nil {
 			a.setLifecycle(codersdk.WorkspaceAgentLifecycleStarting)
@@ -1550,6 +1559,15 @@ func (a *agent) updateCommandEnv(current []string) (updated []string, err error)
 		envs[k] = os.ExpandEnv(v)
 	}
 
+	// User secrets override manifest env vars so that secrets take precedence
+	// over template-defined values, but are still overridden by agent-level
+	// bootstrap vars below.
+	for _, secret := range manifest.Secrets {
+		if secret.EnvName != "" {
+			envs[secret.EnvName] = string(secret.Value)
+		}
+	}
+
 	// Agent-level environment variables should take over all. This is
 	// used for setting agent-specific variables like CODER_AGENT_TOKEN
 	// and GIT_ASKPASS.
@@ -1568,6 +1586,46 @@ func (a *agent) updateCommandEnv(current []string) (updated []string, err error)
 		updated = append(updated, fmt.Sprintf("%s=%s", k, v))
 	}
 	return updated, nil
+}
+
+// writeSecretFiles writes user secrets with a target file path to disk.
+// Errors are logged but do not block workspace startup.
+func writeSecretFiles(ctx context.Context, logger slog.Logger, fs afero.Fs, homeDir string, secrets []agentsdk.WorkspaceSecret) {
+	for _, secret := range secrets {
+		if secret.FilePath == "" {
+			continue
+		}
+
+		filePath := secret.FilePath
+		if strings.HasPrefix(filePath, "~/") {
+			if homeDir == "" {
+				logger.Warn(ctx, "skipping secret file with ~/ path: home directory unknown",
+					slog.F("file_path", filePath),
+				)
+				continue
+			}
+			filePath = filepath.Join(homeDir, filePath[2:])
+		}
+
+		dir := filepath.Dir(filePath)
+		if err := fs.MkdirAll(dir, 0o700); err != nil {
+			logger.Warn(ctx, "failed to create directory for secret file",
+				slog.F("file_path", filePath),
+				slog.Error(err),
+			)
+			continue
+		}
+
+		if err := afero.WriteFile(fs, filePath, secret.Value, 0o600); err != nil {
+			logger.Warn(ctx, "failed to write secret file",
+				slog.F("file_path", filePath),
+				slog.Error(err),
+			)
+			continue
+		}
+
+		logger.Debug(ctx, "wrote secret file", slog.F("file_path", filePath))
+	}
 }
 
 func (*agent) wireguardAddresses(agentID uuid.UUID) []netip.Prefix {

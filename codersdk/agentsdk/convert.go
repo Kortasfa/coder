@@ -62,6 +62,7 @@ func ManifestFromProto(manifest *proto.Manifest) (Manifest, error) {
 		DisableDirectConnections: manifest.DisableDirectConnections,
 		Metadata:                 MetadataDescriptionsFromProto(manifest.Metadata),
 		Devcontainers:            devcontainers,
+		Secrets:                  SecretsFromProto(manifest.Secrets),
 	}, nil
 }
 
@@ -90,6 +91,7 @@ func ProtoFromManifest(manifest Manifest) (*proto.Manifest, error) {
 		Apps:                     apps,
 		Metadata:                 ProtoFromMetadataDescriptions(manifest.Metadata),
 		Devcontainers:            ProtoFromDevcontainers(manifest.Devcontainers),
+		Secrets:                  ProtoFromSecrets(manifest.Secrets),
 	}, nil
 }
 
@@ -476,4 +478,28 @@ func ProtoFromPatchAppStatus(pas PatchAppStatus) (*proto.UpdateAppStatusRequest,
 		Message: pas.Message,
 		Uri:     pas.URI,
 	}, nil
+}
+
+func SecretsFromProto(protoSecrets []*proto.WorkspaceSecret) []WorkspaceSecret {
+	rets := make([]WorkspaceSecret, 0, len(protoSecrets))
+	for _, s := range protoSecrets {
+		rets = append(rets, WorkspaceSecret{
+			EnvName:  s.EnvName,
+			FilePath: s.FilePath,
+			Value:    s.Value,
+		})
+	}
+	return rets
+}
+
+func ProtoFromSecrets(secrets []WorkspaceSecret) []*proto.WorkspaceSecret {
+	rets := make([]*proto.WorkspaceSecret, 0, len(secrets))
+	for _, s := range secrets {
+		rets = append(rets, &proto.WorkspaceSecret{
+			EnvName:  s.EnvName,
+			FilePath: s.FilePath,
+			Value:    s.Value,
+		})
+	}
+	return rets
 }
