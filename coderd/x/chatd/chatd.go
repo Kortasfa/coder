@@ -1503,10 +1503,13 @@ func (p *Server) PromoteQueued(
 	}
 
 	var (
-		result         PromoteQueuedResult
-		promoted       database.ChatMessage
-		updatedChat    database.Chat
-		remainingQueue []database.ChatQueuedMessage
+		result          PromoteQueuedResult
+		promoted        database.ChatMessage
+		updatedChat     database.Chat
+		remainingQueue  []database.ChatQueuedMessage
+		controlWorkerID uuid.UUID
+		controlMsg      coderdpubsub.ChatControlMessage
+		publishControl  bool
 	)
 
 	txErr := p.db.InTx(func(tx database.Store) error {
@@ -1561,6 +1564,11 @@ func (p *Server) PromoteQueued(
 		if err != nil {
 			return err
 		}
+		controlWorkerID, controlMsg, publishControl = controlMessageForWorker(
+			lockedChat,
+			updatedChat.RunGeneration,
+			coderdpubsub.ChatControlReasonRestart,
+		)
 
 		remainingQueue, err = tx.GetChatQueuedMessages(ctx, opts.ChatID)
 		if err != nil {
@@ -1572,6 +1580,9 @@ func (p *Server) PromoteQueued(
 	}, nil)
 	if txErr != nil {
 		return PromoteQueuedResult{}, txErr
+	}
+	if publishControl {
+		p.publishChatControl(controlWorkerID, controlMsg)
 	}
 
 	p.publishEvent(opts.ChatID, codersdk.ChatStreamEvent{
