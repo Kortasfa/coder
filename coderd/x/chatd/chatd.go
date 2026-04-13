@@ -3966,7 +3966,7 @@ func (p *Server) tryAutoPromoteQueuedMessage(
 	).withCreatedBy(chat.OwnerID))
 	msgs, err := insertChatMessageWithStore(ctx, tx, msgParams)
 	if err != nil {
-		return nil, nil, false, xerrors.Errorf("promote queued message: %w", err)
+		return nil, nil, false, xerrors.Errorf("insert promoted message: %w", err)
 	}
 	msg := msgs[0]
 
@@ -4212,6 +4212,15 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 
 		p.publishStatus(chat.ID, status, uuid.NullUUID{})
 
+		// Best-effort: use any generated title captured during
+		// processing so push notifications and the status snapshot
+		// can reflect it without another DB read. The dedicated
+		// title_change event remains the source of truth.
+		if title, ok := generatedTitle.Load(); ok {
+			updatedChat.Title = title
+		}
+		p.publishChatPubsubEvent(updatedChat, codersdk.ChatWatchEventKindStatusChange, nil)
+
 		// Wake the run loop immediately when auto-promote
 		// transitioned the chat to pending, matching every
 		// other pending-transition path (CreateChat,
@@ -4220,16 +4229,6 @@ func (p *Server) processChat(ctx context.Context, chat database.Chat) {
 		if status == database.ChatStatusPending {
 			p.signalWake()
 		}
-
-		// Best-effort: use any generated title captured during
-		// processing so push notifications and the status snapshot
-		// can reflect it without another DB read. The dedicated
-		// title_change event remains the source of truth.
-
-		if title, ok := generatedTitle.Load(); ok {
-			updatedChat.Title = title
-		}
-		p.publishChatPubsubEvent(updatedChat, codersdk.ChatWatchEventKindStatusChange, nil)
 
 		// When the chat is parked in requires_action,
 		// publish the stream event and global pubsub event

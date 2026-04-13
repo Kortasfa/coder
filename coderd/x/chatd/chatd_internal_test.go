@@ -2963,6 +2963,7 @@ func TestAutoPromote_WakesRunLoopAfterPromotion(t *testing.T) {
 	db.EXPECT().GetChatQueuedMessages(gomock.Any(), chatID).Return(nil, nil)
 	db.EXPECT().UpdateChatStatus(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, params database.UpdateChatStatusParams) (database.Chat, error) {
+			require.Equal(t, database.ChatStatusPending, params.Status)
 			return database.Chat{
 				ID:      chatID,
 				OwnerID: ownerID,
@@ -2971,16 +2972,9 @@ func TestAutoPromote_WakesRunLoopAfterPromotion(t *testing.T) {
 		},
 	)
 
-	chat := database.Chat{ID: chatID, OwnerID: ownerID, LastModelConfigID: modelConfigID}
-	processDone := make(chan struct{})
-	go func() {
-		defer close(processDone)
-		server.processChat(ctx, chat)
-	}()
-
-	// Wait for processChat to publish "running" and arm the control
-	// subscriber. We detect this by subscribing to the stream
-	// notify channel and waiting for a "running" status.
+	// Subscribe BEFORE launching the goroutine to avoid a race
+	// where processChat publishes "running" before the subscription
+	// registers.
 	runningCh := make(chan struct{}, 1)
 	unsubRunning, err := ps.SubscribeWithErr(
 		coderdpubsub.ChatStreamNotifyChannel(chatID),
@@ -3002,6 +2996,13 @@ func TestAutoPromote_WakesRunLoopAfterPromotion(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer unsubRunning()
+
+	chat := database.Chat{ID: chatID, OwnerID: ownerID, LastModelConfigID: modelConfigID}
+	processDone := make(chan struct{})
+	go func() {
+		defer close(processDone)
+		server.processChat(ctx, chat)
+	}()
 
 	select {
 	case <-runningCh:
@@ -3034,8 +3035,145 @@ func TestAutoPromote_WakesRunLoopAfterPromotion(t *testing.T) {
 	// auto-promote set status to pending.
 	select {
 	case <-wakeCh:
-		// Signal received.
+	// Signal received.
 	default:
 		t.Fatal("wake channel should have a pending signal after auto-promote")
+	}
+}
+
+// TestAutoPromote_InsertFailureSkipsStatusUpdate verifies that when
+// InsertChatMessages fails inside the deferred auto-promote transaction,
+// UpdateChatStatus is never called and no wake signal is sent.
+func TestAutoPromote_InsertFailureSkipsStatusUpdate(t *testing.T) {
+	t.Parallel()
+
+	ctx := testutil.Context(t, testutil.WaitLong)
+	ctrl := gomock.NewController(t)
+	db := dbmock.NewMockStore(ctrl)
+	tx := dbmock.NewMockStore(ctrl)
+	logger := slogtest.Make(t, &slogtest.Options{IgnoreErrors: true})
+	ps := dbpubsub.NewInMemory()
+	clock := quartz.NewReal()
+
+	chatID := uuid.New()
+	workerID := uuid.New()
+	ownerID := uuid.New()
+	modelConfigID := uuid.New()
+
+	waitingChat := database.Chat{
+		ID:                chatID,
+		OwnerID:           ownerID,
+		LastModelConfigID: modelConfigID,
+		Status:            database.ChatStatusWaiting,
+		WorkerID:          uuid.NullUUID{UUID: workerID, Valid: true},
+	}
+	queuedMsg := database.ChatQueuedMessage{
+		ID:      1,
+		ChatID:  chatID,
+		Content: []byte(`[{"type":"text","text":"queued"}]`),
+	}
+
+	wakeCh := make(chan struct{}, 1)
+	server := &Server{
+		db:                    db,
+		logger:                logger,
+		pubsub:                ps,
+		clock:                 clock,
+		workerID:              workerID,
+		wakeCh:                wakeCh,
+		chatHeartbeatInterval: time.Minute,
+		configCache:           newChatConfigCache(ctx, db, clock),
+		heartbeatRegistry:     make(map[uuid.UUID]*heartbeatEntry),
+	}
+
+	// Block model resolution until the control subscriber fires.
+	modelBlocked := make(chan struct{})
+	db.EXPECT().GetChatModelConfigByID(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ uuid.UUID) (database.ChatModelConfig, error) {
+			<-modelBlocked
+			return database.ChatModelConfig{}, xerrors.New("no model")
+		},
+	).AnyTimes()
+	db.EXPECT().GetEnabledChatProviders(gomock.Any()).Return(nil, nil).AnyTimes()
+	db.EXPECT().GetEnabledChatModelConfigs(gomock.Any()).Return(nil, nil).AnyTimes()
+	db.EXPECT().GetChatUsageLimitConfig(gomock.Any()).Return(
+		database.ChatUsageLimitConfig{}, sql.ErrNoRows,
+	).AnyTimes()
+	db.EXPECT().GetChatMessagesForPromptByChatID(gomock.Any(), chatID).Return(nil, nil).AnyTimes()
+
+	// The deferred cleanup transaction: InsertChatMessages fails,
+	// so UpdateChatStatus must NOT be called.
+	db.EXPECT().InTx(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(fn func(database.Store) error, _ *database.TxOptions) error {
+			return fn(tx)
+		},
+	)
+	tx.EXPECT().GetChatByIDForUpdate(gomock.Any(), chatID).Return(waitingChat, nil)
+	tx.EXPECT().PopNextQueuedMessage(gomock.Any(), chatID).Return(queuedMsg, nil)
+	tx.EXPECT().InsertChatMessages(gomock.Any(), gomock.Any()).Return(
+		nil, xerrors.New("insert failed"),
+	)
+	tx.EXPECT().UpdateChatStatus(gomock.Any(), gomock.Any()).Times(0)
+
+	// Subscribe BEFORE launching the goroutine.
+	runningCh := make(chan struct{}, 1)
+	unsubRunning, err := ps.SubscribeWithErr(
+		coderdpubsub.ChatStreamNotifyChannel(chatID),
+		func(_ context.Context, msg []byte, err error) {
+			if err != nil {
+				return
+			}
+			var notify coderdpubsub.ChatStreamNotifyMessage
+			if json.Unmarshal(msg, &notify) != nil {
+				return
+			}
+			if notify.Status == string(database.ChatStatusRunning) {
+				select {
+				case runningCh <- struct{}{}:
+				default:
+				}
+			}
+		},
+	)
+	require.NoError(t, err)
+	defer unsubRunning()
+
+	chat := database.Chat{ID: chatID, OwnerID: ownerID, LastModelConfigID: modelConfigID}
+	processDone := make(chan struct{})
+	go func() {
+		defer close(processDone)
+		server.processChat(ctx, chat)
+	}()
+
+	select {
+	case <-runningCh:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for running status")
+	}
+
+	// Publish an interrupt so processChat exits runChat.
+	interruptMsg, err := json.Marshal(coderdpubsub.ChatStreamNotifyMessage{
+		Status: string(database.ChatStatusWaiting),
+	})
+	require.NoError(t, err)
+	err = ps.Publish(coderdpubsub.ChatStreamNotifyChannel(chatID), interruptMsg)
+	require.NoError(t, err)
+
+	// Unblock model resolution so runChat can exit.
+	close(modelBlocked)
+
+	select {
+	case <-processDone:
+	case <-ctx.Done():
+		t.Fatal("processChat did not complete")
+	}
+
+	// The wake channel should NOT have a signal because the
+	// transaction failed before reaching UpdateChatStatus.
+	select {
+	case <-wakeCh:
+		t.Fatal("wake channel should not have a signal after insert failure")
+	default:
+		// No signal, as expected.
 	}
 }
