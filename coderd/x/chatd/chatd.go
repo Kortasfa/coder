@@ -899,6 +899,7 @@ func (p *Server) CreateChat(ctx context.Context, opts CreateOptions) (database.C
 			LastModelConfigID: opts.ModelConfigID,
 			Title:             opts.Title,
 			Mode:              opts.ChatMode,
+			PlanMode:          database.NullChatPlanMode{},
 			// Chats created with an initial user message start pending.
 			// Waiting is reserved for idle chats with no pending work.
 			Status:       database.ChatStatusPending,

@@ -6097,6 +6097,17 @@ func (q *querier) UpdateChatPinOrder(ctx context.Context, arg database.UpdateCha
 	return q.db.UpdateChatPinOrder(ctx, arg)
 }
 
+func (q *querier) UpdateChatPlanModeByID(ctx context.Context, arg database.UpdateChatPlanModeByIDParams) (database.Chat, error) {
+	chat, err := q.db.GetChatByID(ctx, arg.ID)
+	if err != nil {
+		return database.Chat{}, err
+	}
+	if err := q.authorizeContext(ctx, policy.ActionUpdate, chat); err != nil {
+		return database.Chat{}, err
+	}
+	return q.db.UpdateChatPlanModeByID(ctx, arg)
+}
+
 func (q *querier) UpdateChatProvider(ctx context.Context, arg database.UpdateChatProviderParams) (database.ChatProvider, error) {
 	if err := q.authorizeContext(ctx, policy.ActionUpdate, rbac.ResourceDeploymentConfig); err != nil {
 		return database.ChatProvider{}, err

@@ -65,6 +65,7 @@ type Chat struct {
 	LastModelConfigID uuid.UUID          `json:"last_model_config_id" format:"uuid"`
 	Title             string             `json:"title"`
 	Status            ChatStatus         `json:"status"`
+	PlanMode          ChatPlanMode       `json:"plan_mode,omitempty"`
 	LastError         *string            `json:"last_error"`
 	DiffStatus        *ChatDiffStatus    `json:"diff_status,omitempty"`
 	CreatedAt         time.Time          `json:"created_at" format:"date-time"`
@@ -393,6 +394,7 @@ type CreateChatRequest struct {
 	// LLM can invoke. This API is highly experimental and highly
 	// subject to change.
 	UnsafeDynamicTools []DynamicTool `json:"unsafe_dynamic_tools,omitempty"`
+	PlanMode           ChatPlanMode  `json:"plan_mode,omitempty"`
 	TurnMode           ChatTurnMode  `json:"turn_mode,omitempty" enums:"plan"`
 }
 
@@ -412,6 +414,9 @@ type UpdateChatRequest struct {
 	//   value is clamped to [1, pinned_count].
 	PinOrder *int32             `json:"pin_order,omitempty"`
 	Labels   *map[string]string `json:"labels,omitempty"`
+	// PlanMode switches the chat's persistent plan mode.
+	// nil: no change, ptr to "plan": enable, ptr to "": clear.
+	PlanMode *ChatPlanMode `json:"plan_mode,omitempty"`
 }
 
 // ChatBusyBehavior controls what happens when a user sends a message
@@ -429,6 +434,14 @@ const (
 	ChatBusyBehaviorInterrupt ChatBusyBehavior = "interrupt"
 )
 
+// ChatPlanMode represents the persistent plan mode state of a chat.
+type ChatPlanMode string
+
+const (
+	// ChatPlanModePlan activates plan mode for the chat.
+	ChatPlanModePlan ChatPlanMode = "plan"
+)
+
 // ChatTurnMode controls the behavior mode for a single chat turn.
 type ChatTurnMode string
 
@@ -444,6 +457,9 @@ type CreateChatMessageRequest struct {
 	MCPServerIDs  *[]uuid.UUID     `json:"mcp_server_ids,omitempty" format:"uuid"`
 	BusyBehavior  ChatBusyBehavior `json:"busy_behavior,omitempty" enums:"queue,interrupt"`
 	TurnMode      ChatTurnMode     `json:"turn_mode,omitempty" enums:"plan"`
+	// PlanMode switches the chat's persistent plan mode.
+	// nil: no change, ptr to "plan": enable, ptr to "": clear.
+	PlanMode *ChatPlanMode `json:"plan_mode,omitempty"`
 }
 
 // EditChatMessageRequest is the request to edit a user message in a chat.

@@ -1600,6 +1600,9 @@ func Chat(c database.Chat, diffStatus *database.ChatDiffStatus, files []database
 	if c.LastError.Valid {
 		chat.LastError = &c.LastError.String
 	}
+	if c.PlanMode.Valid {
+		chat.PlanMode = codersdk.ChatPlanMode(c.PlanMode.ChatPlanMode)
+	}
 	if c.ParentChatID.Valid {
 		parentChatID := c.ParentChatID.UUID
 		chat.ParentChatID = &parentChatID
