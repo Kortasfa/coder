@@ -282,7 +282,11 @@ func TestRecordingTransport_CaptureResponse(t *testing.T) {
 	require.JSONEq(t, `{"token":"[REDACTED]","safe":"ok"}`, string(attempts[0].ResponseBody))
 }
 
-func TestRecordingTransport_CaptureResponseOnEOFWithoutClose(t *testing.T) {
+// TestRecordingTransport_CaptureResponseRecordsOnClose verifies that
+// EOF recording is deferred to Close() rather than firing in Read().
+// This ensures Close()'s validation logic (JSON integrity, content-
+// length checks) always runs.
+func TestRecordingTransport_CaptureResponseRecordsOnClose(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
@@ -308,13 +312,19 @@ func TestRecordingTransport_CaptureResponseOnEOFWithoutClose(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"token":"response-secret","safe":"ok"}`, string(body))
 
+	// Before Close(), the attempt should not yet be recorded
+	// because EOF recording is deferred to Close().
+	require.Empty(t, sink.snapshot(), "attempt should not be recorded before Close()")
+
+	require.NoError(t, resp.Body.Close())
+
 	attempts := sink.snapshot()
 	require.Len(t, attempts, 1)
 	require.Equal(t, http.StatusAccepted, attempts[0].ResponseStatus)
 	require.Equal(t, "application/json", attempts[0].ResponseHeaders["Content-Type"])
 	require.Equal(t, RedactedValue, attempts[0].ResponseHeaders["X-Api-Key"])
 	require.JSONEq(t, `{"token":"[REDACTED]","safe":"ok"}`, string(attempts[0].ResponseBody))
-	require.NoError(t, resp.Body.Close())
+	require.Equal(t, attemptStatusCompleted, attempts[0].Status)
 }
 
 func TestRecordingTransport_StreamingBody(t *testing.T) {
@@ -873,4 +883,349 @@ func TestRecordingTransport_TextPlainPreservedNotRedacted(t *testing.T) {
 	// Non-JSON bodies should be preserved as-is, not replaced
 	// with a redaction diagnostic.
 	require.Equal(t, textPayload, string(attempts[0].ResponseBody))
+}
+
+// TestRecordingTransport_NDJSONRedacted verifies that NDJSON response
+// bodies have secrets redacted on a per-line basis rather than being
+// treated as non-JSON and preserved raw.
+func TestRecordingTransport_NDJSONRedacted(t *testing.T) {
+	t.Parallel()
+
+	ctx, sink := newTestSinkContext(t)
+	ndjsonPayload := "{\"api_key\":\"sk-123\",\"safe\":\"ok\"}\n{\"token\":\"tok-456\",\"data\":\"value\"}\n"
+	client := &http.Client{
+		Transport: &RecordingTransport{
+			Base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // Test NDJSON content type.
+					StatusCode:    http.StatusOK,
+					Header:        http.Header{"Content-Type": []string{"application/x-ndjson"}},
+					Body:          io.NopCloser(strings.NewReader(ndjsonPayload)),
+					ContentLength: int64(len(ndjsonPayload)),
+				}, nil
+			}),
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	// Caller sees original unredacted payload.
+	require.Equal(t, ndjsonPayload, string(body))
+
+	attempts := sink.snapshot()
+	require.Len(t, attempts, 1)
+	require.Equal(t, attemptStatusCompleted, attempts[0].Status)
+	// Recorded body should have secrets redacted per-line.
+	lines := strings.Split(string(attempts[0].ResponseBody), "\n")
+	require.JSONEq(t, `{"api_key":"[REDACTED]","safe":"ok"}`, lines[0])
+	require.JSONEq(t, `{"token":"[REDACTED]","data":"value"}`, lines[1])
+}
+
+// TestRecordingTransport_TruncatedUnknownLengthMarksCompleted verifies
+// that an unknown-length (chunked) response that exceeds the recording
+// buffer is marked as completed, not failed. The caller consumed the
+// body successfully; we just couldn't buffer all of it.
+func TestRecordingTransport_TruncatedUnknownLengthMarksCompleted(t *testing.T) {
+	t.Parallel()
+
+	ctx, sink := newTestSinkContext(t)
+	largeBody := strings.Repeat("x", maxRecordedResponseBodyBytes+1024)
+	client := &http.Client{
+		Transport: &RecordingTransport{
+			Base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // Test unknown-length body.
+					StatusCode:    http.StatusOK,
+					Header:        http.Header{"Content-Type": []string{"application/octet-stream"}},
+					Body:          io.NopCloser(strings.NewReader(largeBody)),
+					ContentLength: -1,
+				}, nil
+			}),
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Len(t, body, maxRecordedResponseBodyBytes+1024)
+	require.NoError(t, resp.Body.Close())
+
+	attempts := sink.snapshot()
+	require.Len(t, attempts, 1)
+	require.Equal(t, attemptStatusCompleted, attempts[0].Status)
+	require.Empty(t, attempts[0].Error)
+	require.Equal(t, []byte("[TRUNCATED]"), attempts[0].ResponseBody)
+}
+
+// errorAfterReadCloser returns data for the first N reads, then an error.
+type errorAfterReadCloser struct {
+	data   []byte
+	offset int
+	errAt  int // byte offset at which to return the error
+	err    error
+}
+
+func (r *errorAfterReadCloser) Read(p []byte) (int, error) {
+	if r.offset >= r.errAt {
+		return 0, r.err
+	}
+	remaining := r.data[r.offset:]
+	if len(remaining) > len(p) {
+		remaining = remaining[:len(p)]
+	}
+	if r.offset+len(remaining) > r.errAt {
+		remaining = remaining[:r.errAt-r.offset]
+	}
+	n := copy(p, remaining)
+	r.offset += n
+	if r.offset >= r.errAt {
+		return n, r.err
+	}
+	return n, nil
+}
+
+func (*errorAfterReadCloser) Close() error {
+	return nil
+}
+
+// TestRecordingTransport_MidStreamReadError verifies that a non-EOF
+// read error during body consumption is recorded immediately with
+// "failed" status and the correct error message.
+func TestRecordingTransport_MidStreamReadError(t *testing.T) {
+	t.Parallel()
+
+	ctx, sink := newTestSinkContext(t)
+	client := &http.Client{
+		Transport: &RecordingTransport{
+			Base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // Test mid-stream error.
+					StatusCode:    http.StatusOK,
+					Header:        http.Header{"Content-Type": []string{"application/json"}},
+					Body:          &errorAfterReadCloser{data: []byte(`{"key":"value"}`), errAt: 10, err: io.ErrUnexpectedEOF},
+					ContentLength: -1,
+				}, nil
+			}),
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+
+	_, err = io.ReadAll(resp.Body)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.NoError(t, resp.Body.Close())
+
+	attempts := sink.snapshot()
+	require.Len(t, attempts, 1)
+	require.Equal(t, attemptStatusFailed, attempts[0].Status)
+	require.Equal(t, io.ErrUnexpectedEOF.Error(), attempts[0].Error)
+}
+
+// trackingReadCloser wraps a reader and counts total bytes delivered
+// via Read. Close always succeeds.
+type trackingReadCloser struct {
+	inner     io.Reader
+	bytesRead int64
+	closed    bool
+}
+
+func (r *trackingReadCloser) Read(p []byte) (int, error) {
+	n, err := r.inner.Read(p)
+	r.bytesRead += int64(n)
+	return n, err
+}
+
+func (r *trackingReadCloser) Close() error {
+	r.closed = true
+	return nil
+}
+
+// failingCloseReader reads normally but returns an error on Close.
+type failingCloseReader struct {
+	inner    io.Reader
+	closeErr error
+}
+
+func (r *failingCloseReader) Read(p []byte) (int, error) {
+	return r.inner.Read(p)
+}
+
+func (r *failingCloseReader) Close() error {
+	return r.closeErr
+}
+
+// TestRecordingTransport_MaxDrainBytesRespected verifies that
+// drainToEOF stops after maxDrainBytes, preventing unbounded reads.
+// The test uses a tracking reader to assert the byte cap.
+func TestRecordingTransport_MaxDrainBytesRespected(t *testing.T) {
+	t.Parallel()
+
+	ctx, sink := newTestSinkContext(t)
+
+	// Build a body where json.Decoder consumes the first JSON document
+	// but leaves trailing whitespace larger than maxDrainBytes. The
+	// drain path should stop after maxDrainBytes, not read everything.
+	jsonDoc := `{"safe":"ok"}`
+	// Trailing whitespace much larger than maxDrainBytes. The drain
+	// should consume at most maxDrainBytes of it.
+	trailing := strings.Repeat(" ", maxDrainBytes*2)
+	fullBody := jsonDoc + trailing
+
+	tracker := &trackingReadCloser{inner: strings.NewReader(fullBody)}
+	client := &http.Client{
+		Transport: &RecordingTransport{
+			Base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // Test maxDrainBytes.
+					StatusCode:    http.StatusOK,
+					Header:        http.Header{"Content-Type": []string{"application/json"}},
+					Body:          tracker,
+					ContentLength: -1,
+				}, nil
+			}),
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+
+	var decoded map[string]string
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&decoded))
+	require.Equal(t, "ok", decoded["safe"])
+	require.NoError(t, resp.Body.Close())
+
+	attempts := sink.snapshot()
+	require.Len(t, attempts, 1)
+	require.Equal(t, attemptStatusCompleted, attempts[0].Status)
+
+	// The key assertion: total bytes read through the tracker should
+	// be bounded. The json.Decoder reads the JSON doc (~13 bytes),
+	// then drainToEOF reads at most maxDrainBytes more. Without the
+	// cap, the full body (maxDrainBytes*2 + 13) would be consumed.
+	maxExpected := int64(len(jsonDoc)) + int64(maxDrainBytes) + 4096 // small buffer overhead
+	require.Less(t, tracker.bytesRead, int64(len(fullBody)),
+		"drain should NOT have consumed the entire body")
+	require.LessOrEqual(t, tracker.bytesRead, maxExpected,
+		"total bytes read should be bounded by maxDrainBytes")
+}
+
+// TestRecordingTransport_InnerCloseError verifies that an error from
+// the inner body's Close() is recorded as a failed attempt and
+// returned to the caller.
+func TestRecordingTransport_InnerCloseError(t *testing.T) {
+	t.Parallel()
+
+	ctx, sink := newTestSinkContext(t)
+	closeErr := xerrors.New("connection reset by peer")
+	client := &http.Client{
+		Transport: &RecordingTransport{
+			Base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // Test close error.
+					StatusCode:    http.StatusOK,
+					Header:        http.Header{"Content-Type": []string{"application/json"}},
+					Body:          &failingCloseReader{inner: strings.NewReader(`{"ok":true}`), closeErr: closeErr},
+					ContentLength: -1,
+				}, nil
+			}),
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+
+	_, err = io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	err = resp.Body.Close()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "connection reset by peer")
+
+	attempts := sink.snapshot()
+	require.Len(t, attempts, 1)
+	require.Equal(t, attemptStatusFailed, attempts[0].Status)
+	require.Contains(t, attempts[0].Error, "connection reset by peer")
+}
+
+// TestRecordingTransport_204NoContentSucceeds verifies that a 204 No
+// Content response is marked completed when closed without reading.
+func TestRecordingTransport_204NoContentSucceeds(t *testing.T) {
+	t.Parallel()
+
+	ctx, sink := newTestSinkContext(t)
+	client := &http.Client{
+		Transport: &RecordingTransport{
+			Base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // Test 204 no-body.
+					StatusCode:    http.StatusNoContent,
+					Header:        http.Header{},
+					Body:          io.NopCloser(strings.NewReader("")),
+					ContentLength: 0,
+					Request:       req,
+				}, nil
+			}),
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, "http://example.invalid/resource", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	attempts := sink.snapshot()
+	require.Len(t, attempts, 1)
+	require.Equal(t, attemptStatusCompleted, attempts[0].Status)
+	require.Empty(t, attempts[0].Error)
+}
+
+// TestRecordingTransport_304NotModifiedSucceeds verifies that a 304
+// Not Modified response is marked completed when closed without
+// reading, even when Content-Length is non-zero.
+func TestRecordingTransport_304NotModifiedSucceeds(t *testing.T) {
+	t.Parallel()
+
+	ctx, sink := newTestSinkContext(t)
+	client := &http.Client{
+		Transport: &RecordingTransport{
+			Base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{ //nolint:exhaustruct // Test 304 no-body.
+					StatusCode:    http.StatusNotModified,
+					Header:        http.Header{"Content-Type": []string{"application/json"}},
+					Body:          io.NopCloser(strings.NewReader("")),
+					ContentLength: 42,
+					Request:       req,
+				}, nil
+			}),
+		},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://example.invalid/resource", nil)
+	require.NoError(t, err)
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+
+	attempts := sink.snapshot()
+	require.Len(t, attempts, 1)
+	require.Equal(t, attemptStatusCompleted, attempts[0].Status)
+	require.Empty(t, attempts[0].Error)
 }

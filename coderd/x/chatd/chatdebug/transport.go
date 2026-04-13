@@ -217,7 +217,11 @@ func (r *recordingBody) Read(p []byte) (int, error) {
 	}
 	r.mu.Unlock()
 
-	if err != nil {
+	// Only record non-EOF errors immediately. io.EOF is deferred
+	// to Close() which runs more sophisticated validation (JSON
+	// completeness checks, content-length verification, etc.).
+	// Recording EOF here would preempt Close() via recordOnce.
+	if err != nil && !errors.Is(err, io.EOF) {
 		r.record(err)
 	}
 	return n, err
@@ -281,6 +285,12 @@ func (r *recordingBody) Close() error {
 		r.record(nil)
 	case contentLength < 0 && !truncated && isCompleteUnknownLengthJSONBody(contentType, responseBody):
 		r.record(nil)
+	// Truncated unknown-length bodies: the caller consumed the
+	// response successfully but the recording buffer exceeded
+	// maxRecordedResponseBodyBytes. This is not a transport
+	// failure - mark as completed with the truncated capture.
+	case contentLength < 0 && truncated:
+		r.record(nil)
 	default:
 		r.record(io.ErrUnexpectedEOF)
 	}
@@ -302,6 +312,14 @@ func isJSONLikeContentType(contentType string) bool {
 		mediaType = strings.TrimSpace(strings.Split(contentType, ";")[0])
 	}
 	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
+func isNDJSONContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		mediaType = strings.TrimSpace(strings.Split(contentType, ";")[0])
+	}
+	return mediaType == "application/x-ndjson"
 }
 
 // maxDrainBytes caps how many trailing bytes drainToEOF will consume.
@@ -382,15 +400,18 @@ func (r *recordingBody) record(err error) {
 		r.mu.Unlock()
 
 		contentType := base.ResponseHeaders["Content-Type"]
-		if truncated {
+		switch {
+		case truncated:
 			base.ResponseBody = []byte("[TRUNCATED]")
-		} else if contentType == "" || isJSONLikeContentType(contentType) {
+		case isNDJSONContentType(contentType):
+			base.ResponseBody = RedactNDJSONSecrets(responseBody)
+		case contentType == "" || isJSONLikeContentType(contentType):
 			// Redact JSON secrets when the content type is JSON-like
 			// or absent (unknown). For unknown types, RedactJSONSecrets
 			// fails closed by replacing non-JSON payloads with a
 			// diagnostic message.
 			base.ResponseBody = RedactJSONSecrets(responseBody)
-		} else {
+		default:
 			// Non-JSON content types (SSE, text/plain, HTML, etc.)
 			// are preserved as-is to avoid losing debug content.
 			base.ResponseBody = responseBody
