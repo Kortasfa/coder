@@ -474,6 +474,7 @@ export const AgentCreateForm: FC<AgentCreateFormProps> = ({
 						</a>{" "}
 						to Coder Agents through September 2026
 					</p>
+				</div>
 			</div>
 			<ConfirmDialog
 				open={pendingOrgChange !== null}

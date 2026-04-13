@@ -849,7 +849,7 @@ func TestTurnModePersistence(t *testing.T) {
 			replica := newTestServer(t, db, ps, uuid.New())
 
 			ctx := testutil.Context(t, testutil.WaitLong)
-			user, model := seedChatDependencies(ctx, t, db)
+			user, _, model := seedChatDependencies(ctx, t, db)
 			tt.run(ctx, t, db, replica, user, model)
 		})
 	}
@@ -894,7 +894,7 @@ func TestPlanTurnRootPolicy(t *testing.T) {
 		)
 	})
 
-	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, `# Plan
 
@@ -1005,7 +1005,7 @@ func TestStandardTurnHidesProposePlan(t *testing.T) {
 		)
 	})
 
-	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
@@ -1065,7 +1065,7 @@ func TestPlanTurnPromptContract(t *testing.T) {
 		)
 	})
 
-	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
@@ -1123,7 +1123,7 @@ func TestStandardTurnNoPlanningLeakage(t *testing.T) {
 		)
 	})
 
-	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
@@ -1179,7 +1179,7 @@ func TestPlanTurnAskUserQuestion(t *testing.T) {
 		)
 	})
 
-	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
@@ -1242,7 +1242,7 @@ func TestPlanTurnBlocksNonBuiltInTools(t *testing.T) {
 		)
 	})
 
-	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	server := newActiveTestServer(t, db, ps)
 
 	standardChat, err := server.CreateChat(ctx, chatd.CreateOptions{
@@ -1341,7 +1341,7 @@ func TestChainModeDisabledOnModeChange(t *testing.T) {
 		}
 	})
 
-	user, model := seedChatDependenciesWithProvider(ctx, t, db, "openai", openAIURL)
+	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai", openAIURL)
 
 	storeResponses := true
 	optionsJSON, err := json.Marshal(codersdk.ChatModelCallConfig{

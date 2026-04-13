@@ -793,7 +793,6 @@ func TestPostChats(t *testing.T) {
 		sdkErr := requireSDKError(t, err, http.StatusBadRequest)
 		require.Equal(t, "Workspace does not belong to the specified organization.", sdkErr.Message)
 	})
-
 }
 
 func TestListChats(t *testing.T) {
