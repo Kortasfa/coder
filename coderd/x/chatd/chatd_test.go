@@ -894,7 +894,7 @@ func TestPlanTurnRootPolicy(t *testing.T) {
 		)
 	})
 
-	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, org, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, `# Plan
 
@@ -903,11 +903,12 @@ func TestPlanTurnRootPolicy(t *testing.T) {
 `)
 
 	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "plan-turn-root-policy",
-		ModelConfigID: model.ID,
-		TurnMode:      "plan",
-		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "plan-turn-root-policy",
+		ModelConfigID:  model.ID,
+		TurnMode:       "plan",
+		WorkspaceID:    uuid.NullUUID{UUID: ws.ID, Valid: true},
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText("Plan the feature"),
 		},
@@ -1005,15 +1006,16 @@ func TestStandardTurnHidesProposePlan(t *testing.T) {
 		)
 	})
 
-	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, org, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
 	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "standard-turn-hides-propose-plan",
-		ModelConfigID: model.ID,
-		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "standard-turn-hides-propose-plan",
+		ModelConfigID:  model.ID,
+		WorkspaceID:    uuid.NullUUID{UUID: ws.ID, Valid: true},
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText("Answer the question"),
 		},
@@ -1065,16 +1067,17 @@ func TestPlanTurnPromptContract(t *testing.T) {
 		)
 	})
 
-	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, org, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
 	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "plan-turn-prompt-contract",
-		ModelConfigID: model.ID,
-		TurnMode:      "plan",
-		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "plan-turn-prompt-contract",
+		ModelConfigID:  model.ID,
+		TurnMode:       "plan",
+		WorkspaceID:    uuid.NullUUID{UUID: ws.ID, Valid: true},
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText("Plan the rollout."),
 		},
@@ -1123,15 +1126,16 @@ func TestStandardTurnNoPlanningLeakage(t *testing.T) {
 		)
 	})
 
-	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, org, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
 	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "standard-turn-no-planning-leakage",
-		ModelConfigID: model.ID,
-		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "standard-turn-no-planning-leakage",
+		ModelConfigID:  model.ID,
+		WorkspaceID:    uuid.NullUUID{UUID: ws.ID, Valid: true},
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText("Answer directly."),
 		},
@@ -1179,16 +1183,17 @@ func TestPlanTurnAskUserQuestion(t *testing.T) {
 		)
 	})
 
-	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, org, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	ws, dbAgent := seedWorkspaceWithAgent(t, db, user.ID)
 	server := newWorkspaceToolTestServer(t, db, ps, dbAgent.ID, "# Plan\n")
 
 	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "plan-turn-ask-user-question",
-		ModelConfigID: model.ID,
-		TurnMode:      "plan",
-		WorkspaceID:   uuid.NullUUID{UUID: ws.ID, Valid: true},
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "plan-turn-ask-user-question",
+		ModelConfigID:  model.ID,
+		TurnMode:       "plan",
+		WorkspaceID:    uuid.NullUUID{UUID: ws.ID, Valid: true},
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText("Plan the next steps."),
 		},
@@ -1242,13 +1247,14 @@ func TestPlanTurnBlocksNonBuiltInTools(t *testing.T) {
 		)
 	})
 
-	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
+	user, org, model := seedChatDependenciesWithProvider(ctx, t, db, "openai-compat", openAIURL)
 	server := newActiveTestServer(t, db, ps)
 
 	standardChat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "standard-turn-dynamic-tool",
-		ModelConfigID: model.ID,
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "standard-turn-dynamic-tool",
+		ModelConfigID:  model.ID,
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText("Use whatever tools are available."),
 		},
@@ -1258,10 +1264,11 @@ func TestPlanTurnBlocksNonBuiltInTools(t *testing.T) {
 	waitForChatProcessed(ctx, t, db, standardChat.ID, server)
 
 	planChat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "plan-turn-dynamic-tool-filter",
-		ModelConfigID: model.ID,
-		TurnMode:      "plan",
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "plan-turn-dynamic-tool-filter",
+		ModelConfigID:  model.ID,
+		TurnMode:       "plan",
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText("Plan the work without using custom tools."),
 		},
@@ -1341,7 +1348,7 @@ func TestChainModeDisabledOnModeChange(t *testing.T) {
 		}
 	})
 
-	user, _, model := seedChatDependenciesWithProvider(ctx, t, db, "openai", openAIURL)
+	user, org, model := seedChatDependenciesWithProvider(ctx, t, db, "openai", openAIURL)
 
 	storeResponses := true
 	optionsJSON, err := json.Marshal(codersdk.ChatModelCallConfig{
@@ -1374,10 +1381,11 @@ func TestChainModeDisabledOnModeChange(t *testing.T) {
 	thirdPrompt := "Standard gamma: " + strings.Repeat("gamma ", 48)
 
 	chat, err := server.CreateChat(ctx, chatd.CreateOptions{
-		OwnerID:       user.ID,
-		Title:         "chain-mode-disabled-on-mode-change",
-		ModelConfigID: model.ID,
-		TurnMode:      "plan",
+		OwnerID:        user.ID,
+		OrganizationID: org.ID,
+		Title:          "chain-mode-disabled-on-mode-change",
+		ModelConfigID:  model.ID,
+		TurnMode:       "plan",
 		InitialUserContent: []codersdk.ChatMessagePart{
 			codersdk.ChatMessageText(firstPrompt),
 		},
