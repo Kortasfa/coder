@@ -118,12 +118,11 @@ export const AgentSettingsBehaviorPageView: FC<
 	const isAnyPromptSaving = isSavingSystemPrompt || isSavingUserPrompt;
 
 	return (
-		<>
+		<div className="flex flex-col gap-10">
 			<SectionHeader
 				label="Behavior"
 				description="Custom instructions that shape how the agent responds in your conversations."
 			/>
-
 			<PersonalInstructionsSettings
 				userPromptData={userPromptData}
 				onSaveUserPrompt={onSaveUserPrompt}
@@ -131,7 +130,6 @@ export const AgentSettingsBehaviorPageView: FC<
 				isSaveUserPromptError={isSaveUserPromptError}
 				isAnyPromptSaving={isAnyPromptSaving}
 			/>
-
 			<hr className="my-5 border-0 border-t border-solid border-border" />
 			<ChatFullWidthSettings />
 
@@ -150,22 +148,19 @@ export const AgentSettingsBehaviorPageView: FC<
 			{/* ── Admin-only settings ── */}
 			{canSetSystemPrompt && (
 				<>
-					<hr className="my-5 border-0 border-t border-solid border-border" />
 					<SystemInstructionsSettings
 						systemPromptData={systemPromptData}
 						onSaveSystemPrompt={onSaveSystemPrompt}
+						isSavingSystemPrompt={isSavingSystemPrompt}
 						isSaveSystemPromptError={isSaveSystemPromptError}
 						isAnyPromptSaving={isAnyPromptSaving}
 					/>
-					<hr className="my-5 border-0 border-t border-solid border-border" />
 					<VirtualDesktopSettings
 						desktopEnabledData={desktopEnabledData}
 						onSaveDesktopEnabled={onSaveDesktopEnabled}
 						isSavingDesktopEnabled={isSavingDesktopEnabled}
 						isSaveDesktopEnabledError={isSaveDesktopEnabledError}
 					/>
-
-					<hr className="my-5 border-0 border-t border-solid border-border" />
 					<WorkspaceAutostopSettings
 						workspaceTTLData={workspaceTTLData}
 						isWorkspaceTTLLoading={isWorkspaceTTLLoading}
@@ -174,8 +169,6 @@ export const AgentSettingsBehaviorPageView: FC<
 						isSavingWorkspaceTTL={isSavingWorkspaceTTL}
 						isSaveWorkspaceTTLError={isSaveWorkspaceTTLError}
 					/>
-
-					<hr className="my-5 border-0 border-t border-solid border-border" />
 					<RetentionPeriodSettings
 						retentionDaysData={retentionDaysData}
 						isRetentionDaysLoading={isRetentionDaysLoading}
@@ -186,6 +179,6 @@ export const AgentSettingsBehaviorPageView: FC<
 					/>
 				</>
 			)}
-		</>
+		</div>
 	);
 };
