@@ -224,10 +224,12 @@ export const DefaultAutostopSave: Story = {
 			expect(saveButton).toBeEnabled();
 		});
 
-		// Clearing to 0 should disable Save because toggle is still ON.
+		// Clearing back to the original value hides Save (pristine form).
 		await userEvent.clear(durationInput);
 		await waitFor(() => {
-			expect(saveButton).toBeDisabled();
+			expect(
+				within(ttlForm).queryByRole("button", { name: "Save" }),
+			).toBeNull();
 		});
 	},
 };
@@ -297,10 +299,7 @@ export const DefaultAutostopSaveDisabled: Story = {
 		expect(durationInput).toHaveValue("2");
 
 		const ttlForm = durationInput.closest("form")!;
-		const saveButton = within(ttlForm).getByRole("button", {
-			name: "Save",
-		});
-		expect(saveButton).toBeDisabled();
+		expect(within(ttlForm).queryByRole("button", { name: "Save" })).toBeNull();
 	},
 };
 
