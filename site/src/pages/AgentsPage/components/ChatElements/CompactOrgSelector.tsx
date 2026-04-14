@@ -50,7 +50,7 @@ export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
 					disabled={isDisabled}
 					data-testid="compact-org-selector"
 					className={cn(
-						"flex h-8 w-auto cursor-pointer items-center gap-1 border-none bg-transparent px-1 text-xs text-content-secondary shadow-none transition-colors",
+						"group flex h-8 w-auto items-center gap-1.5 border-none bg-transparent px-1 text-xs font-medium text-content-secondary shadow-none whitespace-nowrap transition-colors",
 						"hover:text-content-primary focus:ring-0",
 						"disabled:cursor-not-allowed disabled:opacity-50",
 						className,
@@ -74,7 +74,7 @@ export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
 					)}
 					<ChevronDownIcon
 						open={open}
-						className="size-icon-sm shrink-0 text-content-secondary transition-colors hover:text-content-primary"
+						className="size-icon-sm shrink-0 text-content-secondary transition-colors hover:text-content-primary group-hover:text-content-primary"
 					/>
 				</button>
 			</PopoverTrigger>
