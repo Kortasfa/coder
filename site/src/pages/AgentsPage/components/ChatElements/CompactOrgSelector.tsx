@@ -104,7 +104,8 @@ export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
 										size="sm"
 										src={org.icon}
 										fallback={org.display_name}
-									/>
+										className="!size-3.5 border-0"
+									/>{" "}
 									<span className="truncate">
 										{org.display_name || org.name}
 									</span>
