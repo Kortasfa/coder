@@ -65,7 +65,7 @@ const AgentCreatePage: FC = () => {
 			model_config_id: modelConfigID,
 			mcp_server_ids:
 				mcpServerIds && mcpServerIds.length > 0 ? mcpServerIds : undefined,
-			turn_mode: turnMode,
+			plan_mode: turnMode === "plan" ? "plan" : undefined,
 		});
 
 		if (modelConfigID !== nilUUID) {
@@ -73,12 +73,7 @@ const AgentCreatePage: FC = () => {
 		} else {
 			localStorage.removeItem(lastModelConfigIDStorageKey);
 		}
-		navigate(
-			buildAgentChatPath({
-				chatId: createdChat.id,
-				planModeEnabled: turnMode === "plan",
-			}),
-		);
+		navigate(buildAgentChatPath({ chatId: createdChat.id }));
 	};
 
 	return (

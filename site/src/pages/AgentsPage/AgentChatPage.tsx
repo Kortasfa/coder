@@ -15,6 +15,7 @@ import { buildOptimisticEditedMessage } from "#/api/queries/chatMessageEdits";
 import {
 	chat,
 	chatDesktopEnabled,
+	chatKey,
 	chatMessagesForInfiniteScroll,
 	chatModelConfigs,
 	chatModels,
@@ -24,7 +25,9 @@ import {
 	interruptChat,
 	mcpServerConfigs,
 	promoteChatQueuedMessage,
+	updateChatPlanMode,
 	updateChatWorkspace,
+	updateInfiniteChatsCache,
 	userCompactionThresholds,
 } from "#/api/queries/chats";
 import { deploymentSSHConfig } from "#/api/queries/deployment";
@@ -36,7 +39,6 @@ import {
 import type * as TypesGen from "#/api/typesGenerated";
 import type { ChatMessagePart } from "#/api/typesGenerated";
 import { useProxy } from "#/contexts/ProxyContext";
-import { useSearchParamsKey } from "#/hooks/useSearchParamsKey";
 import {
 	getTerminalHref,
 	getVSCodeHref,
@@ -81,10 +83,6 @@ import {
 	hasUserFixableProviders,
 	resolveModelOptionId,
 } from "./utils/modelOptions";
-import {
-	PLAN_MODE_SEARCH_PARAM,
-	PLAN_MODE_SEARCH_VALUE,
-} from "./utils/planMode";
 import { parsePullRequestUrl } from "./utils/pullRequest";
 import {
 	type ChatDetailError,
@@ -98,6 +96,10 @@ export const RIGHT_PANEL_OPEN_KEY = "agents.right-panel-open";
 const lastModelConfigIDStorageKey = "agents.last-model-config-id";
 /** @internal Exported for testing. */
 export const draftInputStorageKeyPrefix = "agents.draft-input.";
+
+const clearChatPlanMode = "" as TypesGen.ChatPlanMode;
+
+type PlanModeSwitch = TypesGen.ChatPlanMode | "clear";
 
 /**
  * Read the persisted plain-text draft for a given chat ID.
@@ -538,14 +540,6 @@ const AgentChatPage: FC = () => {
 	} = useOutletContext<AgentsOutletContext>();
 	const queryClient = useQueryClient();
 	const [selectedModel, setSelectedModel] = useState("");
-	const planModeSearchParam = useSearchParamsKey({
-		key: PLAN_MODE_SEARCH_PARAM,
-		replace: true,
-	});
-	const planModeEnabled = planModeSearchParam.value === PLAN_MODE_SEARCH_VALUE;
-	const planModeToggleVersionRef = useRef(0);
-
-	const hasPlanModeAutoRestored = useRef(false);
 	const scrollToBottomRef = useRef<(() => void) | null>(null);
 	const chatInputRef = useRef<ChatMessageInputRef | null>(null);
 	const inputValueRef = useRef(
@@ -689,6 +683,7 @@ const AgentChatPage: FC = () => {
 	const { proxy } = useProxy();
 
 	const chatRecord = chatQuery.data;
+	const planModeEnabled = chatRecord?.plan_mode === "plan";
 
 	// Initialize MCP selection from chat record or defaults.
 	const effectiveMCPServerIds = (() => {
@@ -741,41 +736,6 @@ const AgentChatPage: FC = () => {
 					has_more: chatMessagesQuery.data?.pages.at(-1)?.has_more ?? false,
 				}
 			: undefined;
-	const lastUserMessageIsPlan = (() => {
-		if (!chatMessagesList) {
-			return false;
-		}
-		for (let index = chatMessagesList.length - 1; index >= 0; index -= 1) {
-			const message = chatMessagesList[index];
-			if (message.role !== "user") {
-				continue;
-			}
-			return "turn_mode" in message && message.turn_mode === "plan";
-		}
-		return false;
-	})();
-
-	useEffect(() => {
-		if (hasPlanModeAutoRestored.current) {
-			return;
-		}
-		if (!chatMessagesQuery.data) {
-			return;
-		}
-		hasPlanModeAutoRestored.current = true;
-		if (planModeEnabled) {
-			return;
-		}
-		if (lastUserMessageIsPlan) {
-			planModeSearchParam.setValue(PLAN_MODE_SEARCH_VALUE);
-		}
-	}, [
-		chatMessagesQuery.data,
-		lastUserMessageIsPlan,
-		planModeEnabled,
-		planModeSearchParam,
-	]);
-
 	const isArchived = chatRecord?.archived ?? false;
 	const isRegenerateTitleDisabled = isArchived || isRegeneratingThisChat;
 	const chatLastModelConfigID = chatRecord?.last_model_config_id;
@@ -808,6 +768,28 @@ const AgentChatPage: FC = () => {
 			toast.error(getErrorMessage(error, "Failed to update workspace."));
 		},
 	});
+
+	const updateChatPlanModeBase = updateChatPlanMode(queryClient);
+	const updateChatPlanModeMutation = useMutation({
+		...updateChatPlanModeBase,
+		onError: (error, variables, context) => {
+			updateChatPlanModeBase.onError(error, variables, context);
+			toast.error(getErrorMessage(error, "Failed to update plan mode."));
+		},
+	});
+	const setCachedChatPlanMode = (
+		chatId: string,
+		planMode?: TypesGen.ChatPlanMode,
+	) => {
+		updateInfiniteChatsCache(queryClient, (chats) =>
+			chats.map((chat) =>
+				chat.id === chatId ? { ...chat, plan_mode: planMode } : chat,
+			),
+		);
+		queryClient.setQueryData<TypesGen.Chat>(chatKey(chatId), (previousChat) =>
+			previousChat ? { ...previousChat, plan_mode: planMode } : previousChat,
+		);
+	};
 
 	const { store, clearStreamError, upsertCacheMessages } = useChatStore({
 		chatID: agentId,
@@ -909,17 +891,14 @@ const AgentChatPage: FC = () => {
 
 	const isWorkspaceLoading =
 		workspacesQuery.isLoading || updateChatWorkspaceMutation.isPending;
-	const setPlanModeEnabled = (enabled: boolean) => {
-		if (enabled) {
-			planModeSearchParam.setValue(PLAN_MODE_SEARCH_VALUE);
+	const handlePlanModeToggle = (enabled: boolean) => {
+		if (!agentId || enabled === planModeEnabled) {
 			return;
 		}
-		planModeSearchParam.deleteValue();
-	};
-
-	const handlePlanModeToggle = (enabled: boolean) => {
-		planModeToggleVersionRef.current += 1;
-		setPlanModeEnabled(enabled);
+		updateChatPlanModeMutation.mutate({
+			chatId: agentId,
+			planMode: enabled ? "plan" : undefined,
+		});
 	};
 
 	const handleUsageLimitError = (error: unknown): void => {
@@ -1202,18 +1181,14 @@ const AgentChatPage: FC = () => {
 		message,
 		attachments,
 		editedMessageID,
-		turnMode,
 		useComposerContent = true,
-		resetPlanModeOnSuccess = false,
-		planModeToggleVersion,
+		planModeSwitch,
 	}: {
 		message: string;
 		attachments?: readonly PendingAttachment[];
 		editedMessageID?: number;
-		turnMode?: TypesGen.ChatTurnMode | null;
 		useComposerContent?: boolean;
-		resetPlanModeOnSuccess?: boolean;
-		planModeToggleVersion?: number;
+		planModeSwitch?: PlanModeSwitch;
 	}) {
 		const { content, hasContent } = buildChatInputContent({
 			message,
@@ -1256,9 +1231,6 @@ const AgentChatPage: FC = () => {
 				handleUsageLimitError(error);
 				throw error;
 			}
-			if (resetPlanModeOnSuccess) {
-				setPlanModeEnabled(false);
-			}
 			return;
 		}
 
@@ -1270,7 +1242,12 @@ const AgentChatPage: FC = () => {
 				effectiveMCPServerIds.length > 0
 					? [...effectiveMCPServerIds]
 					: undefined,
-			turn_mode: turnMode === null ? undefined : turnMode,
+			...(planModeSwitch !== undefined
+				? {
+						plan_mode:
+							planModeSwitch === "clear" ? clearChatPlanMode : planModeSwitch,
+					}
+				: {}),
 		};
 		clearChatErrorReason(agentId);
 		clearStreamError();
@@ -1312,11 +1289,11 @@ const AgentChatPage: FC = () => {
 		} else {
 			localStorage.removeItem(lastModelConfigIDStorageKey);
 		}
-		if (
-			resetPlanModeOnSuccess &&
-			planModeToggleVersion === planModeToggleVersionRef.current
-		) {
-			setPlanModeEnabled(false);
+		if (planModeSwitch !== undefined) {
+			setCachedChatPlanMode(
+				agentId,
+				planModeSwitch === "clear" ? undefined : planModeSwitch,
+			);
 		}
 	}
 
@@ -1325,15 +1302,10 @@ const AgentChatPage: FC = () => {
 		attachments?: readonly PendingAttachment[],
 		editedMessageID?: number,
 	) {
-		const submittedInPlanMode = planModeEnabled;
-		const planModeToggleVersion = planModeToggleVersionRef.current;
 		await submitChatTurn({
 			message,
 			attachments,
 			editedMessageID,
-			turnMode: submittedInPlanMode ? "plan" : undefined,
-			resetPlanModeOnSuccess: submittedInPlanMode,
-			planModeToggleVersion,
 		});
 	}
 
@@ -1345,24 +1317,17 @@ const AgentChatPage: FC = () => {
 	};
 
 	const handleSendAskUserQuestionResponse = async (message: string) => {
-		const submittedInPlanMode = planModeEnabled;
-		const planModeToggleVersion = planModeToggleVersionRef.current;
 		await submitChatTurn({
 			message,
-			turnMode: submittedInPlanMode ? "plan" : undefined,
 			useComposerContent: false,
-			resetPlanModeOnSuccess: false,
-			planModeToggleVersion,
 		});
 	};
 
 	const handleImplementPlan = async () => {
 		await submitChatTurn({
 			message: "Implement the plan.",
-			turnMode: null,
+			planModeSwitch: "clear",
 			useComposerContent: false,
-			resetPlanModeOnSuccess: planModeEnabled,
-			planModeToggleVersion: planModeToggleVersionRef.current,
 		});
 	};
 
