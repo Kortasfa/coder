@@ -785,6 +785,7 @@ type CreateOptions struct {
 	Title              string
 	ModelConfigID      uuid.UUID
 	ChatMode           database.NullChatMode
+	PlanMode           database.NullChatPlanMode
 	TurnMode           string
 	SystemPrompt       string
 	InitialUserContent []codersdk.ChatMessagePart
@@ -813,6 +814,7 @@ type SendMessageOptions struct {
 	Content       []codersdk.ChatMessagePart
 	ModelConfigID *uuid.UUID
 	BusyBehavior  SendMessageBusyBehavior
+	PlanMode      *database.NullChatPlanMode
 	TurnMode      string
 	MCPServerIDs  *[]uuid.UUID
 }
@@ -877,6 +879,14 @@ func (p *Server) CreateChat(ctx context.Context, opts CreateOptions) (database.C
 		opts.Labels = database.StringMap{}
 	}
 
+	planMode := opts.PlanMode
+	if !planMode.Valid {
+		legacyPlanMode := planModeFromTurnModeRequest(opts.TurnMode)
+		if legacyPlanMode.Valid {
+			planMode = legacyPlanMode
+		}
+	}
+
 	var chat database.Chat
 	txErr := p.db.InTx(func(tx database.Store) error {
 		if limitErr := p.checkUsageLimit(ctx, tx, opts.OwnerID); limitErr != nil {
@@ -899,7 +909,7 @@ func (p *Server) CreateChat(ctx context.Context, opts CreateOptions) (database.C
 			LastModelConfigID: opts.ModelConfigID,
 			Title:             opts.Title,
 			Mode:              opts.ChatMode,
-			PlanMode:          database.NullChatPlanMode{},
+			PlanMode:          planMode,
 			// Chats created with an initial user message start pending.
 			// Waiting is reserved for idle chats with no pending work.
 			Status:       database.ChatStatusPending,
@@ -986,7 +996,7 @@ func (p *Server) CreateChat(ctx context.Context, opts CreateOptions) (database.C
 			database.ChatMessageVisibilityBoth,
 			opts.ModelConfigID,
 			chatprompt.CurrentContentVersion,
-		).withCreatedBy(opts.OwnerID).withTurnMode(turnModeFromRequest(opts.TurnMode)))
+		).withCreatedBy(opts.OwnerID).withTurnMode(turnModeFromPlanMode(planMode)))
 
 		_, err = tx.InsertChatMessages(ctx, msgParams)
 		if err != nil {
@@ -1037,6 +1047,14 @@ func (p *Server) SendMessage(
 		return SendMessageResult{}, xerrors.Errorf("marshal message content: %w", err)
 	}
 
+	requestedPlanMode := opts.PlanMode
+	if requestedPlanMode == nil {
+		legacyPlanMode := planModeFromTurnModeRequest(opts.TurnMode)
+		if legacyPlanMode.Valid {
+			requestedPlanMode = &legacyPlanMode
+		}
+	}
+
 	var (
 		result            SendMessageResult
 		queuedMessagesSDK []codersdk.ChatQueuedMessage
@@ -1051,6 +1069,16 @@ func (p *Server) SendMessage(
 		// Enforce usage limits before queueing or inserting.
 		if limitErr := p.checkUsageLimit(ctx, tx, lockedChat.OwnerID); limitErr != nil {
 			return limitErr
+		}
+
+		if requestedPlanMode != nil {
+			lockedChat, err = tx.UpdateChatPlanModeByID(ctx, database.UpdateChatPlanModeByIDParams{
+				PlanMode: *requestedPlanMode,
+				ID:       opts.ChatID,
+			})
+			if err != nil {
+				return xerrors.Errorf("update chat plan mode: %w", err)
+			}
 		}
 
 		modelConfigID := lockedChat.LastModelConfigID
@@ -1068,6 +1096,9 @@ func (p *Server) SendMessage(
 				return xerrors.Errorf("update chat mcp server ids: %w", err)
 			}
 		}
+
+		effectivePlanMode := lockedChat.PlanMode
+		turnMode := turnModeFromPlanMode(effectivePlanMode)
 
 		existingQueued, err := tx.GetChatQueuedMessages(ctx, opts.ChatID)
 		if err != nil {
@@ -1092,7 +1123,7 @@ func (p *Server) SendMessage(
 			queued, err := tx.InsertChatQueuedMessage(ctx, database.InsertChatQueuedMessageParams{
 				ChatID:   opts.ChatID,
 				Content:  content.RawMessage,
-				TurnMode: turnModeFromRequest(opts.TurnMode),
+				TurnMode: turnMode,
 			})
 			if err != nil {
 				return xerrors.Errorf("insert queued message: %w", err)
@@ -1117,7 +1148,7 @@ func (p *Server) SendMessage(
 			modelConfigID,
 			content,
 			opts.CreatedBy,
-			turnModeFromRequest(opts.TurnMode),
+			turnMode,
 		)
 		if err != nil {
 			return err
@@ -2470,13 +2501,36 @@ func (m chatMessage) withTurnMode(mode database.NullChatTurnMode) chatMessage {
 	return m
 }
 
-func turnModeFromRequest(s string) database.NullChatTurnMode {
-	if s == "" {
+func planModeFromTurnModeRequest(s string) database.NullChatPlanMode {
+	turnMode := database.ChatTurnMode(s)
+	if !turnMode.Valid() {
+		return database.NullChatPlanMode{}
+	}
+
+	switch turnMode {
+	case database.ChatTurnModePlan:
+		return database.NullChatPlanMode{
+			ChatPlanMode: database.ChatPlanModePlan,
+			Valid:        true,
+		}
+	default:
+		return database.NullChatPlanMode{}
+	}
+}
+
+func turnModeFromPlanMode(pm database.NullChatPlanMode) database.NullChatTurnMode {
+	if !pm.Valid || !pm.ChatPlanMode.Valid() {
 		return database.NullChatTurnMode{}
 	}
-	return database.NullChatTurnMode{
-		ChatTurnMode: database.ChatTurnMode(s),
-		Valid:        true,
+
+	switch pm.ChatPlanMode {
+	case database.ChatPlanModePlan:
+		return database.NullChatTurnMode{
+			ChatTurnMode: database.ChatTurnModePlan,
+			Valid:        true,
+		}
+	default:
+		return database.NullChatTurnMode{}
 	}
 }
 
@@ -4600,15 +4654,10 @@ func (p *Server) runChat(
 		return result, err
 	}
 
-	// Capture the current turn's mode so prompt and tool behavior can
-	// be resolved consistently for the rest of the turn.
-	var currentTurnMode database.NullChatTurnMode
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == database.ChatMessageRoleUser {
-			currentTurnMode = messages[i].TurnMode
-			break
-		}
-	}
+	// Capture the current turn's mode from the chat plan mode so prompt
+	// and tool behavior can be resolved consistently for the rest of the
+	// turn.
+	currentTurnMode := turnModeFromPlanMode(chat.PlanMode)
 	isPlanTurn := currentTurnMode.Valid && currentTurnMode.ChatTurnMode == database.ChatTurnModePlan
 	var planModeInstructions string
 	if isPlanTurn {
