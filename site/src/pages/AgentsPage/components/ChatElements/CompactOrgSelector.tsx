@@ -87,7 +87,7 @@ export const CompactOrgSelector: FC<CompactOrgSelectorProps> = ({
 					<CommandInput placeholder="Find organization…" className="text-xs" />
 					<CommandList>
 						<CommandEmpty className="text-xs">
-							No organizations found.
+							No organizations found
 						</CommandEmpty>
 						<CommandGroup>
 							{options.map((org) => (
