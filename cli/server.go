@@ -741,6 +741,9 @@ func (r *RootCmd) Server(newAPI func(context.Context, *coderd.Options) (*coderd.
 				Entitlements:                entitlements.New(),
 				NotificationsEnqueuer:       notifications.NewNoopEnqueuer(), // Changed further down if notifications enabled.
 			}
+			// We removed telemetry support, so use a no-op reporter.
+			options.Telemetry = telemetry.NewNoop()
+
 			if httpServers.TLSConfig != nil {
 				options.TLSCertificates = httpServers.TLSConfig.Certificates
 			}
@@ -1414,9 +1417,6 @@ func (r *RootCmd) Server(newAPI func(context.Context, *coderd.Options) (*coderd.
 				<-tunnel.Wait()
 				cliui.Infof(inv.Stdout, "Done waiting for tunnel")
 			}
-
-			// Ensures a last report can be sent before exit!
-			options.Telemetry.Close()
 
 			// Trigger context cancellation for any remaining services.
 			cancel()
