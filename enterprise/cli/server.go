@@ -9,7 +9,6 @@ import (
 	"errors"
 	"io"
 	"net/url"
-	"time"
 
 	"golang.org/x/xerrors"
 	"tailscale.com/derp"
@@ -18,11 +17,11 @@ import (
 	agplcoderd "github.com/coder/coder/v2/coderd"
 	"github.com/coder/coder/v2/coderd/database"
 	"github.com/coder/coder/v2/cryptorand"
+	"github.com/coder/coder/v2/enterprise/aibridged"
 	"github.com/coder/coder/v2/enterprise/audit"
 	"github.com/coder/coder/v2/enterprise/audit/backends"
 	"github.com/coder/coder/v2/enterprise/coderd"
 	"github.com/coder/coder/v2/enterprise/coderd/dormancy"
-	"github.com/coder/coder/v2/enterprise/coderd/usage"
 	"github.com/coder/coder/v2/enterprise/dbcrypt"
 	"github.com/coder/coder/v2/enterprise/trialer"
 	"github.com/coder/coder/v2/tailnet"
@@ -95,7 +94,6 @@ func (r *RootCmd) Server(_ func()) *serpent.Command {
 			ConnectionLogging:         true,
 			BrowserOnly:               options.DeploymentValues.BrowserOnly.Value(),
 			SCIMAPIKey:                []byte(options.DeploymentValues.SCIMAPIKey.Value()),
-			UseLegacySCIM:             options.DeploymentValues.UseLegacySCIM.Value(),
 			RBAC:                      true,
 			DERPServerRelayAddress:    options.DeploymentValues.DERP.Server.RelayURL.String(),
 			DERPServerRegionID:        int(options.DeploymentValues.DERP.Server.RegionID.Value()),
@@ -135,63 +133,38 @@ func (r *RootCmd) Server(_ func()) *serpent.Command {
 		}
 		closers.Add(api)
 
-		// Start the enterprise usage publisher routine. This won't do anything
-		// unless the deployment is licensed and one of the licenses has usage
-		// publishing enabled.
-		publisher := usage.NewTallymanPublisher(ctx, options.Logger, options.Database, o.LicenseKeys,
-			usage.PublisherWithHTTPClient(api.HTTPClient),
-		)
-		err = publisher.Start()
-		if err != nil {
-			_ = closers.Close()
-			return nil, nil, xerrors.Errorf("start usage publisher: %w", err)
-		}
-		closers.Add(publisher)
-
-		// usageCron are heartbeat events to the usage table. These events are eventually sent
-		// to Tallyman.
-		usageCron := usage.NewCron(quartz.NewReal(), options.Logger.Named("usage-cron"), options.Database, *options.UsageInserter.Load())
-		// ai-seats heartbeats track the number of users that have used an AI feature.
-		// These users consume a seat for the AI addon to our License.
-		_ = usageCron.Register(usage.CronJob{
-			Name:     "ai-seats",
-			Interval: usage.AISeatsInterval,
-			Jitter:   10 * time.Minute,
-			Fn:       usage.AISeatsHeartbeat(options.Database),
-		})
-		usageCron.Start(ctx)
-		closers.Add(usageCron)
-
-		// In-memory AI Bridge Proxy daemon. The bridge daemon itself is
-		// started unconditionally by AGPL cli/server.go (chatd uses its
-		// in-memory roundtripper regardless of license); only the proxy
-		// daemon remains enterprise-gated by config.
-		if options.DeploymentValues.AI.BridgeProxyConfig.Enabled.Value() {
-			// Seed env-derived providers before the proxy daemon's reloader
-			// reads them back so the proxy observes them on first startup.
-			// options.Database is dbcrypt-wrapped at this point (set by
-			// coderd.New above), so env-seeded keys are also written
-			// encrypted. Detached ctx for the same reason as in agplcli
-			// below: an early return would orphan newAPI's goroutines.
-			// Seeding is idempotent; the agplcli path seeds again
-			// post-newAPI.
-			//nolint:gocritic // Production timeout, not a test wait.
-			aibridgeInitCtx, aibridgeInitCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-			defer aibridgeInitCancel()
-			if err := agplcoderd.SeedAIProvidersFromEnv(
-				aibridgeInitCtx,
-				options.Database,
-				options.DeploymentValues.AI.BridgeConfig,
-				options.Logger.Named("aibridge.envseed"),
-			); err != nil {
-				return nil, nil, xerrors.Errorf("seed ai providers from env: %w", err)
+		// In-memory aibridge daemon.
+		// TODO(@deansheather): the lifecycle of the aibridged server is
+		// probably better managed by the enterprise API type itself. Managing
+		// it in the API type means we can avoid starting it up when the license
+		// is not entitled to the feature.
+		var aibridgeDaemon *aibridged.Server
+		if options.DeploymentValues.AI.BridgeConfig.Enabled {
+			aibridgeDaemon, err = newAIBridgeDaemon(api)
+			if err != nil {
+				return nil, nil, xerrors.Errorf("create aibridged: %w", err)
 			}
-			aiBridgeProxyCloser, err := newAIBridgeProxyDaemon(api)
+
+			api.RegisterInMemoryAIBridgedHTTPHandler(aibridgeDaemon)
+
+			// When running as an in-memory daemon, the HTTP handler is wired into the
+			// coderd API and therefore is subject to its context. Calling Close() on
+			// aibridged will NOT affect in-flight requests but those will be closed once
+			// the API server is itself shutdown.
+			closers.Add(aibridgeDaemon)
+		}
+
+		// In-memory AI Bridge Proxy daemon
+		if options.DeploymentValues.AI.BridgeProxyConfig.Enabled.Value() {
+			aiBridgeProxyServer, err := newAIBridgeProxyDaemon(api)
 			if err != nil {
 				_ = closers.Close()
 				return nil, nil, xerrors.Errorf("create aibridgeproxyd: %w", err)
 			}
-			closers.Add(aiBridgeProxyCloser)
+			closers.Add(aiBridgeProxyServer)
+
+			// Register the handler so coderd can serve the proxy endpoints.
+			api.RegisterInMemoryAIBridgeProxydHTTPHandler(aiBridgeProxyServer.Handler())
 		}
 
 		return api.AGPL, closers, nil
