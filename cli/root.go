@@ -4,12 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/tls"
-	"crypto/x509"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,6 +22,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mattn/go-isatty"
 	"github.com/mitchellh/go-wordwrap"
 	"golang.org/x/mod/semver"
@@ -37,7 +33,6 @@ import (
 	"github.com/coder/coder/v2/cli/config"
 	"github.com/coder/coder/v2/cli/gitauth"
 	"github.com/coder/coder/v2/cli/sessionstore"
-	"github.com/coder/coder/v2/cli/telemetry"
 	"github.com/coder/coder/v2/codersdk"
 	"github.com/coder/coder/v2/codersdk/agentsdk"
 	"github.com/coder/pretty"
@@ -74,26 +69,19 @@ const (
 	varDisableDirect           = "disable-direct-connections"
 	varDisableNetworkTelemetry = "disable-network-telemetry"
 	varUseKeyring              = "use-keyring"
-	varClientTLSCAFile         = "client-tls-ca-file"
-	varClientTLSCertFile       = "client-tls-cert-file"
-	varClientTLSKeyFile        = "client-tls-key-file"
 
 	notLoggedInMessage = "You are not logged in. Try logging in using '%s login <url>'."
 
-	envNoVersionCheck    = "CODER_NO_VERSION_WARNING"
-	envNoFeatureWarning  = "CODER_NO_FEATURE_WARNING"
-	envSessionToken      = "CODER_SESSION_TOKEN"
-	envUseKeyring        = "CODER_USE_KEYRING"
-	envClientTLSCAFile   = "CODER_CLIENT_TLS_CA_FILE"
-	envClientTLSCertFile = "CODER_CLIENT_TLS_CERT_FILE"
-	envClientTLSKeyFile  = "CODER_CLIENT_TLS_KEY_FILE"
+	envNoVersionCheck   = "CODER_NO_VERSION_WARNING"
+	envNoFeatureWarning = "CODER_NO_FEATURE_WARNING"
+	envSessionToken     = "CODER_SESSION_TOKEN"
+	envUseKeyring       = "CODER_USE_KEYRING"
 	//nolint:gosec
 	envAgentToken = "CODER_AGENT_TOKEN"
 	//nolint:gosec
 	envAgentTokenFile = "CODER_AGENT_TOKEN_FILE"
 	envAgentURL       = "CODER_AGENT_URL"
 	envAgentAuth      = "CODER_AGENT_AUTH"
-	envAgentName      = "CODER_AGENT_NAME"
 	envURL            = "CODER_URL"
 )
 
@@ -111,7 +99,6 @@ func (r *RootCmd) CoreSubcommands() []*serpent.Command {
 		r.portForward(),
 		r.publickey(),
 		r.resetPassword(),
-		r.secrets(),
 		r.sharing(),
 		r.state(),
 		r.tasksCommand(),
@@ -158,7 +145,6 @@ func (r *RootCmd) AGPLExperimental() []*serpent.Command {
 	return []*serpent.Command{
 		r.scaletestCmd(),
 		r.errorExample(),
-		r.chatCommand(),
 		r.mcpCommand(),
 		r.promptExample(),
 		r.rptyCommand(),
@@ -327,9 +313,14 @@ func (r *RootCmd) Command(subcommands []*serpent.Command) (*serpent.Command, err
 	cmd.Walk(func(cmd *serpent.Command) {
 		// TODO: we should really be consistent about naming.
 		if cmd.Name() == "delete" || cmd.Name() == "remove" {
-			if !slices.Contains(cmd.Aliases, "rm") {
-				cmd.Aliases = append(cmd.Aliases, "rm")
+			if slices.Contains(cmd.Aliases, "rm") {
+				merr = errors.Join(
+					merr,
+					xerrors.Errorf("command %q shouldn't have alias %q since it's added automatically", cmd.FullName(), "rm"),
+				)
+				return
 			}
+			cmd.Aliases = append(cmd.Aliases, "rm")
 		}
 	})
 
@@ -343,11 +334,10 @@ func (r *RootCmd) Command(subcommands []*serpent.Command) (*serpent.Command, err
 					// support links.
 					return
 				}
-				if cmd.Name() == "agent-firewall" || cmd.Name() == "boundary" {
-					// The agent-firewall command (and its "boundary" alias) is
-					// integrated from the boundary package and has YAML-only
-					// options (e.g., allowlist from config file) that don't
-					// have flags or env vars.
+				if cmd.Name() == "boundary" {
+					// The boundary command is integrated from the boundary package
+					// and has YAML-only options (e.g., allowlist from config file)
+					// that don't have flags or env vars.
 					return
 				}
 				merr = errors.Join(
@@ -498,27 +488,6 @@ func (r *RootCmd) Command(subcommands []*serpent.Command) (*serpent.Command, err
 			Group:       globalGroup,
 		},
 		{
-			Flag:        varClientTLSCAFile,
-			Env:         envClientTLSCAFile,
-			Description: "Path to a CA certificate file to trust for API and DERP connections.",
-			Value:       serpent.StringOf(&r.tlsCAFile),
-			Group:       globalGroup,
-		},
-		{
-			Flag:        varClientTLSCertFile,
-			Env:         envClientTLSCertFile,
-			Description: "Path to a client certificate file for mTLS authentication with API and DERP. Requires --client-tls-key-file.",
-			Value:       serpent.StringOf(&r.tlsClientCertFile),
-			Group:       globalGroup,
-		},
-		{
-			Flag:        varClientTLSKeyFile,
-			Env:         envClientTLSKeyFile,
-			Description: "Path to a client private key file for mTLS authentication with API and DERP. Requires --client-tls-cert-file.",
-			Value:       serpent.StringOf(&r.tlsClientKeyFile),
-			Group:       globalGroup,
-		},
-		{
 			Flag: varUseKeyring,
 			Env:  envUseKeyring,
 			Description: "Store and retrieve session tokens using the operating system " +
@@ -585,12 +554,6 @@ type RootCmd struct {
 	// clock is used for time-dependent operations. Initialized to
 	// quartz.NewReal() in Command() if not set via SetClock.
 	clock quartz.Clock
-
-	// TLS configuration for custom CA or client certificates.
-	tlsCAFile         string
-	tlsClientCertFile string
-	tlsClientKeyFile  string
-	tlsConfig         *tls.Config
 }
 
 // SetClock sets the clock used for time-dependent operations.
@@ -621,55 +584,6 @@ func (r *RootCmd) ensureClientURL() error {
 	return err
 }
 
-// ensureTLSConfig loads the TLS configuration from files if specified.
-// The resulting config is used for both API requests and DERP connections.
-// If tlsConfig is already set programmatically, file-based configuration is skipped.
-func (r *RootCmd) ensureTLSConfig() error {
-	// Already loaded or programmatically set - skip file loading
-	if r.tlsConfig != nil {
-		return nil
-	}
-
-	// No TLS config needed
-	if r.tlsCAFile == "" && r.tlsClientCertFile == "" && r.tlsClientKeyFile == "" {
-		return nil
-	}
-
-	// Validate that cert and key are specified together
-	if (r.tlsClientCertFile == "") != (r.tlsClientKeyFile == "") {
-		return xerrors.Errorf("--%s and --%s must be specified together", varClientTLSCertFile, varClientTLSKeyFile)
-	}
-
-	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	}
-
-	// Load CA certificate if specified
-	if r.tlsCAFile != "" {
-		caData, err := os.ReadFile(r.tlsCAFile)
-		if err != nil {
-			return xerrors.Errorf("read TLS CA file %q: %w", r.tlsCAFile, err)
-		}
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(caData) {
-			return xerrors.Errorf("failed to parse CA certificate in %q", r.tlsCAFile)
-		}
-		tlsConfig.RootCAs = caPool
-	}
-
-	// Load client certificate if specified
-	if r.tlsClientCertFile != "" && r.tlsClientKeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(r.tlsClientCertFile, r.tlsClientKeyFile)
-		if err != nil {
-			return xerrors.Errorf("load TLS client certificate: %w", err)
-		}
-		tlsConfig.Certificates = []tls.Certificate{cert}
-	}
-
-	r.tlsConfig = tlsConfig
-	return nil
-}
-
 // InitClient creates and configures a new client with authentication, telemetry,
 // and version checks.
 func (r *RootCmd) InitClient(inv *serpent.Invocation) (*codersdk.Client, error) {
@@ -691,11 +605,6 @@ func (r *RootCmd) InitClient(inv *serpent.Invocation) (*codersdk.Client, error) 
 		}
 	}
 
-	// Load TLS config from files if specified
-	if err := r.ensureTLSConfig(); err != nil {
-		return nil, err
-	}
-
 	// Configure HTTP client with transport wrappers
 	httpClient, err := r.createHTTPClient(inv.Context(), r.clientURL, inv)
 	if err != nil {
@@ -709,10 +618,6 @@ func (r *RootCmd) InitClient(inv *serpent.Invocation) (*codersdk.Client, error) 
 
 	if r.disableDirect {
 		clientOpts = append(clientOpts, codersdk.WithDisableDirectConnections())
-	}
-
-	if r.tlsConfig != nil {
-		clientOpts = append(clientOpts, codersdk.WithDERPTLSConfig(r.tlsConfig))
 	}
 
 	if r.debugHTTP {
@@ -762,11 +667,6 @@ func (r *RootCmd) TryInitClient(inv *serpent.Invocation) (*codersdk.Client, erro
 
 	// Only configure the client if we have a URL
 	if r.clientURL != nil && r.clientURL.String() != "" {
-		// Load TLS config from files if specified
-		if err := r.ensureTLSConfig(); err != nil {
-			return nil, err
-		}
-
 		// Configure HTTP client with transport wrappers
 		httpClient, err := r.createHTTPClient(inv.Context(), r.clientURL, inv)
 		if err != nil {
@@ -780,10 +680,6 @@ func (r *RootCmd) TryInitClient(inv *serpent.Invocation) (*codersdk.Client, erro
 
 		if r.disableDirect {
 			clientOpts = append(clientOpts, codersdk.WithDisableDirectConnections())
-		}
-
-		if r.tlsConfig != nil {
-			clientOpts = append(clientOpts, codersdk.WithDERPTLSConfig(r.tlsConfig))
 		}
 
 		if r.debugHTTP {
@@ -807,23 +703,13 @@ func (r *RootCmd) HeaderTransport(ctx context.Context, serverURL *url.URL) (*cod
 }
 
 func (r *RootCmd) createHTTPClient(ctx context.Context, serverURL *url.URL, inv *serpent.Invocation) (*http.Client, error) {
-	baseTransport, err := newHTTPTransport(r.tlsConfig)
-	if err != nil {
-		return nil, err
-	}
-	transport := baseTransport
-
-	transport = wrapTransportWithTelemetryHeader(transport, inv)
+	transport := http.DefaultTransport
 	transport = wrapTransportWithUserAgentHeader(transport, inv)
 	if !r.noVersionCheck {
-		buildInfoTransport, err := newHTTPTransport(r.tlsConfig)
-		if err != nil {
-			return nil, err
-		}
-		transport = wrapTransportWithVersionCheck(transport, inv, buildinfo.Version(), func(ctx context.Context) (codersdk.BuildInfoResponse, error) {
+		transport = wrapTransportWithVersionMismatchCheck(transport, inv, buildinfo.Version(), func(ctx context.Context) (codersdk.BuildInfoResponse, error) {
 			// Create a new client without any wrapped transport
 			// otherwise it creates an infinite loop!
-			basicClient := codersdk.New(serverURL, codersdk.WithHTTPClient(&http.Client{Transport: buildInfoTransport}))
+			basicClient := codersdk.New(serverURL)
 			return basicClient.BuildInfo(ctx)
 		})
 	}
@@ -843,31 +729,7 @@ func (r *RootCmd) createHTTPClient(ctx context.Context, serverURL *url.URL, inv 
 	}, nil
 }
 
-func newHTTPTransport(tlsConfig *tls.Config) (http.RoundTripper, error) {
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		if tlsConfig != nil {
-			return nil, xerrors.New("cannot apply TLS config: http.DefaultTransport is not *http.Transport")
-		}
-		return http.DefaultTransport, nil
-	}
-
-	// Clone http.DefaultTransport for each CLI client. Parallel tests and
-	// embedded callers may close idle connections on their own clients, and
-	// sharing the process-global transport can interrupt in-flight requests.
-	transport := defaultTransport.Clone()
-	if tlsConfig != nil {
-		transport.TLSClientConfig = tlsConfig
-	}
-	return transport, nil
-}
-
 func (r *RootCmd) createUnauthenticatedClient(ctx context.Context, serverURL *url.URL, inv *serpent.Invocation) (*codersdk.Client, error) {
-	// Load TLS config for login and other unauthenticated requests
-	if err := r.ensureTLSConfig(); err != nil {
-		return nil, err
-	}
-
 	httpClient, err := r.createHTTPClient(ctx, serverURL, inv)
 	if err != nil {
 		return nil, err
@@ -921,7 +783,6 @@ type AgentAuth struct {
 	agentTokenFile string
 	agentURL       url.URL
 	agentAuth      string
-	agentName      string
 }
 
 func (a *AgentAuth) AttachOptions(cmd *serpent.Command, hidden bool) {
@@ -954,13 +815,6 @@ func (a *AgentAuth) AttachOptions(cmd *serpent.Command, hidden bool) {
 		Default:     "token",
 		Value:       serpent.StringOf(&a.agentAuth),
 		Hidden:      hidden,
-	}, serpent.Option{
-		Name:        "Agent Name",
-		Description: "The name of the agent to authenticate as (only applicable for instance identity).",
-		Flag:        "agent-name",
-		Env:         envAgentName,
-		Value:       serpent.StringOf(&a.agentName),
-		Hidden:      hidden,
 	})
 }
 
@@ -970,11 +824,6 @@ func (a *AgentAuth) CreateClient() (*agentsdk.Client, error) {
 	agentURL := a.agentURL
 	if agentURL.String() == "" {
 		return nil, xerrors.Errorf("%s must be set", envAgentURL)
-	}
-
-	var iiOpts []agentsdk.InstanceIdentityOption
-	if a.agentName != "" {
-		iiOpts = append(iiOpts, agentsdk.WithInstanceIdentityAgentName(a.agentName))
 	}
 
 	switch a.agentAuth {
@@ -995,11 +844,11 @@ func (a *AgentAuth) CreateClient() (*agentsdk.Client, error) {
 		}
 		return agentsdk.New(&a.agentURL, agentsdk.WithFixedToken(token)), nil
 	case "google-instance-identity":
-		return agentsdk.New(&a.agentURL, agentsdk.WithGoogleInstanceIdentity("", nil, iiOpts...)), nil
+		return agentsdk.New(&a.agentURL, agentsdk.WithGoogleInstanceIdentity("", nil)), nil
 	case "aws-instance-identity":
-		return agentsdk.New(&a.agentURL, agentsdk.WithAWSInstanceIdentity(iiOpts...)), nil
+		return agentsdk.New(&a.agentURL, agentsdk.WithAWSInstanceIdentity()), nil
 	case "azure-instance-identity":
-		return agentsdk.New(&a.agentURL, agentsdk.WithAzureInstanceIdentity(iiOpts...)), nil
+		return agentsdk.New(&a.agentURL, agentsdk.WithAzureInstanceIdentity()), nil
 	default:
 		return nil, xerrors.Errorf("unknown agent auth type: %s", a.agentAuth)
 	}
@@ -1083,6 +932,36 @@ func (o *OrganizationContext) Selected(inv *serpent.Invocation, client *codersdk
 	}
 
 	return codersdk.Organization{}, xerrors.Errorf("Must select an organization with --org=<org_name>. Choose from: %s", strings.Join(validOrgs, ", "))
+}
+
+func splitNamedWorkspace(identifier string) (owner string, workspaceName string, err error) {
+	parts := strings.Split(identifier, "/")
+
+	switch len(parts) {
+	case 1:
+		owner = codersdk.Me
+		workspaceName = parts[0]
+	case 2:
+		owner = parts[0]
+		workspaceName = parts[1]
+	default:
+		return "", "", xerrors.Errorf("invalid workspace name: %q", identifier)
+	}
+	return owner, workspaceName, nil
+}
+
+// namedWorkspace fetches and returns a workspace by an identifier, which may be either
+// a bare name (for a workspace owned by the current user) or a "user/workspace" combination,
+// where user is either a username or UUID.
+func namedWorkspace(ctx context.Context, client *codersdk.Client, identifier string) (codersdk.Workspace, error) {
+	if uid, err := uuid.Parse(identifier); err == nil {
+		return client.Workspace(ctx, uid)
+	}
+	owner, name, err := splitNamedWorkspace(identifier)
+	if err != nil {
+		return codersdk.Workspace{}, err
+	}
+	return client.WorkspaceByOwnerAndName(ctx, owner, name, codersdk.WorkspaceOptions{})
 }
 
 func initAppearance(ctx context.Context, client *codersdk.Client) codersdk.AppearanceConfig {
@@ -1288,12 +1167,6 @@ func (e *exitError) Error() string {
 
 func (e *exitError) Unwrap() error {
 	return e.err
-}
-
-// ExitCode returns the OS exit code that the CLI will use when this error is
-// returned from a command handler.
-func (e *exitError) ExitCode() int {
-	return e.code
 }
 
 // ExitError returns an error that will cause the CLI to exit with the given
@@ -1557,21 +1430,6 @@ func defaultUpgradeMessage(version string) string {
 	return fmt.Sprintf("download the server version with: 'curl -L https://coder.com/install.sh | sh -s -- --version %s'", version)
 }
 
-// serverVersionMessage returns a warning message if the server version
-// is a release candidate or development build. Returns empty string
-// for stable versions. RC is checked before devel because RC dev
-// builds (e.g. v2.33.0-rc.1-devel+hash) contain both tags.
-func serverVersionMessage(serverVersion string) string {
-	switch {
-	case buildinfo.IsRCVersion(serverVersion):
-		return fmt.Sprintf("the server is running a release candidate of Coder (%s)", serverVersion)
-	case buildinfo.IsDevVersion(serverVersion):
-		return fmt.Sprintf("the server is running a development version of Coder (%s)", serverVersion)
-	default:
-		return ""
-	}
-}
-
 // wrapTransportWithEntitlementsCheck adds a middleware to the HTTP transport
 // that checks for entitlement warnings and prints them to the user.
 func wrapTransportWithEntitlementsCheck(rt http.RoundTripper, w io.Writer) http.RoundTripper {
@@ -1590,10 +1448,10 @@ func wrapTransportWithEntitlementsCheck(rt http.RoundTripper, w io.Writer) http.
 	})
 }
 
-// wrapTransportWithVersionCheck adds a middleware to the HTTP transport
-// that checks the server version and warns about development builds,
-// release candidates, and client/server version mismatches.
-func wrapTransportWithVersionCheck(rt http.RoundTripper, inv *serpent.Invocation, clientVersion string, getBuildInfo func(ctx context.Context) (codersdk.BuildInfoResponse, error)) http.RoundTripper {
+// wrapTransportWithVersionMismatchCheck adds a middleware to the HTTP transport
+// that checks for version mismatches between the client and server. If a mismatch
+// is detected, a warning is printed to the user.
+func wrapTransportWithVersionMismatchCheck(rt http.RoundTripper, inv *serpent.Invocation, clientVersion string, getBuildInfo func(ctx context.Context) (codersdk.BuildInfoResponse, error)) http.RoundTripper {
 	var once sync.Once
 	return roundTripper(func(req *http.Request) (*http.Response, error) {
 		res, err := rt.RoundTrip(req)
@@ -1605,16 +1463,9 @@ func wrapTransportWithVersionCheck(rt http.RoundTripper, inv *serpent.Invocation
 			if serverVersion == "" {
 				return
 			}
-			// Warn about non-stable server versions. Skip
-			// during tests to avoid polluting golden files.
-			if msg := serverVersionMessage(serverVersion); msg != "" && flag.Lookup("test.v") == nil {
-				warning := pretty.Sprint(cliui.DefaultStyles.Warn, msg)
-				_, _ = fmt.Fprintln(inv.Stderr, warning)
-			}
 			if buildinfo.VersionsMatch(clientVersion, serverVersion) {
 				return
 			}
-
 			upgradeMessage := defaultUpgradeMessage(semver.Canonical(serverVersion))
 			if serverInfo, err := getBuildInfo(inv.Context()); err == nil {
 				switch {
@@ -1632,51 +1483,6 @@ func wrapTransportWithVersionCheck(rt http.RoundTripper, inv *serpent.Invocation
 			_, _ = fmt.Fprintln(inv.Stderr, warning)
 		})
 		return res, err
-	})
-}
-
-// wrapTransportWithTelemetryHeader adds telemetry headers to report command usage
-// to an HTTP transport.
-func wrapTransportWithTelemetryHeader(transport http.RoundTripper, inv *serpent.Invocation) http.RoundTripper {
-	var (
-		value string
-		once  sync.Once
-	)
-	return roundTripper(func(req *http.Request) (*http.Response, error) {
-		once.Do(func() {
-			// We only want to compute this header once when a request
-			// first goes out, hence the complexity with locking here.
-			var topts []telemetry.Option
-			for _, opt := range inv.Command.FullOptions() {
-				if opt.ValueSource == serpent.ValueSourceNone || opt.ValueSource == serpent.ValueSourceDefault {
-					continue
-				}
-				topts = append(topts, telemetry.Option{
-					Name:        opt.Name,
-					ValueSource: string(opt.ValueSource),
-				})
-			}
-			ti := telemetry.Invocation{
-				Command:   inv.Command.FullName(),
-				Options:   topts,
-				InvokedAt: time.Now(),
-			}
-
-			byt, err := json.Marshal(ti)
-			if err != nil {
-				// Should be impossible
-				panic(err)
-			}
-			s := base64.StdEncoding.EncodeToString(byt)
-			// Don't send the header if it's too long!
-			if len(s) <= 4096 {
-				value = s
-			}
-		})
-		if value != "" {
-			req.Header.Add(codersdk.CLITelemetryHeader, value)
-		}
-		return transport.RoundTrip(req)
 	})
 }
 
@@ -1745,8 +1551,8 @@ func headerTransport(ctx context.Context, serverURL *url.URL, header []string, h
 	return transport, nil
 }
 
-// PrintDeprecatedOptions loops through all command options, and
-// prints a warning for usage of deprecated options.
+// printDeprecatedOptions loops through all command options, and prints
+// a warning for usage of deprecated options.
 func PrintDeprecatedOptions() serpent.MiddlewareFunc {
 	return func(next serpent.HandlerFunc) serpent.HandlerFunc {
 		return func(inv *serpent.Invocation) error {
@@ -1761,22 +1567,11 @@ func PrintDeprecatedOptions() serpent.MiddlewareFunc {
 					continue
 				}
 
-				// Verify that this deprecated option was itself
-				// the source of the value. Serpent propagates
-				// ValueSource across all options that share the
-				// same Value pointer, so a new option being set
-				// can make a deprecated sibling appear set when
-				// it was not.
-				source := deprecatedOptionDirectSource(inv, opt)
-				if source == serpent.ValueSourceNone {
-					continue
-				}
-
 				var warnStr strings.Builder
-				_, _ = warnStr.WriteString(translateSource(source, opt))
+				_, _ = warnStr.WriteString(translateSource(opt.ValueSource, opt))
 				_, _ = warnStr.WriteString(" is deprecated, please use ")
 				for i, use := range opt.UseInstead {
-					_, _ = warnStr.WriteString(translateSource(source, use))
+					_, _ = warnStr.WriteString(translateSource(opt.ValueSource, use))
 					if i != len(opt.UseInstead)-1 {
 						_, _ = warnStr.WriteString(" and ")
 					}
@@ -1791,34 +1586,6 @@ func PrintDeprecatedOptions() serpent.MiddlewareFunc {
 			return next(inv)
 		}
 	}
-}
-
-// deprecatedOptionDirectSource returns the source by which a deprecated
-// option was directly set, ignoring any propagated ValueSource from
-// sibling options that share the same Value pointer.
-func deprecatedOptionDirectSource(inv *serpent.Invocation, opt serpent.Option) serpent.ValueSource {
-	if opt.Flag != "" {
-		fl := inv.ParsedFlags().Lookup(opt.Flag)
-		if fl != nil && fl.Changed {
-			return serpent.ValueSourceFlag
-		}
-	}
-
-	if opt.Env != "" {
-		_, exists := inv.Environ.Lookup(opt.Env)
-		if exists {
-			return serpent.ValueSourceEnv
-		}
-	}
-
-	if opt.ValueSource == serpent.ValueSourceYAML {
-		// There is no straightforward way to check whether a
-		// specific YAML key was present in the config file, so
-		// we conservatively assume the deprecated key was used.
-		return serpent.ValueSourceYAML
-	}
-
-	return serpent.ValueSourceNone
 }
 
 // translateSource provides the name of the source of the option, depending on the
